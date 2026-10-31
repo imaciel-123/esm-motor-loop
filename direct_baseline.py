@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
+import shutil
+import tempfile
 from pathlib import Path
 import sys
 from uuid import uuid4
@@ -222,6 +224,75 @@ def print_preview(info: dict) -> None:
     print("PREVIEW: nenhum upload nem chamada paga foi realizado.")
 
 
+
+# Snapshot aprovado no inventário anterior: somente FONTE, não análise ou código anterior.
+FROZEN_ESM103_VERSION = "18fdeb43c05f321541ffa3ba434fbbc85e95bd37110bf3af217a7107ab424791"
+
+
+def autofill_frozen_originals(input_dir: Path, archive_dir: Path | None = None) -> bool:
+    """Recupera 29 originais do pacote congelado se data/input estiver vazia.
+
+    Os três documentos F030-F032 são transcrições das planilhas já incluídas
+    entre os originais. Sem API, sem interpretar fontes, sem cópia parcial.
+    """
+    input_dir = input_dir.resolve()
+    if input_dir.exists():
+        if not input_dir.is_dir():
+            raise ValueError("data/input existe, mas não é uma pasta.")
+        if any(input_dir.iterdir()):
+            return False
+    if archive_dir is None:
+        archive_dir = (Path(__file__).resolve().parent.parent / "spike-llm-v3"
+                       / ".casework" / "esm-103" / "packages" / FROZEN_ESM103_VERSION)
+    archive_dir = archive_dir.resolve()
+    package_path = archive_dir / "package.json"
+    if not package_path.is_file():
+        raise ValueError(
+            "Os documentos originais ainda não estão em data/input. "
+            "Também não encontrei o pacote congelado do inventário em " + str(archive_dir)
+            + ". Nenhum arquivo foi enviado."
+        )
+    package = json.loads(package_path.read_text(encoding="utf-8"))
+    canonical = json.dumps(package, sort_keys=True, ensure_ascii=False,
+                           separators=(",", ":")).encode("utf-8")
+    if sha256(canonical) != FROZEN_ESM103_VERSION:
+        raise ValueError("A versão do inventário congelado não confere; nenhum envio realizado.")
+    entries = package.get("sources", [])
+    if len(entries) != 32:
+        raise ValueError("O inventário não contém as 32 entradas esperadas; nenhum envio.")
+    sources = []
+    for n, item in enumerate(entries[:29], 1):
+        source_id = f"F{n:03d}"
+        name, digest = item.get("original_filename"), item.get("original_digest")
+        if (item.get("id") != source_id or not name or not digest
+                or Path(name).name != name or "/" in name or "\\" in name):
+            raise ValueError("Identificação de fonte original inválida: " + source_id)
+        original = archive_dir / "sources" / (source_id + ".original")
+        if not original.is_file() or sha256(original.read_bytes()) != digest:
+            raise ValueError(f"Arquivo original ausente ou alterado: {source_id} ({name}).")
+        sources.append((name, original))
+    if len({name.casefold() for name, _ in sources}) != 29:
+        raise ValueError("Nomes repetidos entre as fontes originais: nenhuma cópia realizada.")
+    if [s.get("id") for s in entries[29:]] != ["F030", "F031", "F032"]:
+        raise ValueError("As fontes derivadas não correspondem ao inventário esperado.")
+    input_dir.parent.mkdir(parents=True, exist_ok=True)
+    staging = Path(tempfile.mkdtemp(prefix=".esm103-fontes-", dir=str(input_dir.parent)))
+    try:
+        for name, original in sources:
+            shutil.copyfile(original, staging / name)
+        if input_dir.exists():
+            if any(input_dir.iterdir()):
+                raise ValueError("A pasta de entrada mudou; nenhum arquivo sobrescrito.")
+            input_dir.rmdir()
+        staging.rename(input_dir)
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging)
+    print("29 arquivos ORIGINAIS recuperados e conferidos automaticamente em data/input.", flush=True)
+    print("As 3 planilhas XLSX estão incluídas; transcrições duplicadas não foram copiadas.", flush=True)
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Baseline cognitivo: envio direto de arquivos originais à OpenAI")
     parser.add_argument("--dir", type=Path, default=Path("data/input"), help="Diretório de arquivos originais")
@@ -239,13 +310,13 @@ def main() -> int:
         print("Estado de exclusão:", [(f["name"], f["delete_status"]) for f in record["uploads"]])
         return 0
     try:
+        if args.execute and args.dir == Path("data/input"):
+            autofill_frozen_originals(args.dir)
         info = scan(args.dir, args.question)
         if not args.execute:
             print_preview(info)
             return 0
-        print("Arquivos validados localmente:", info["file_count"])
-        print("Modelo:", MODEL)
-        print("A próxima etapa enviará os arquivos originais à OpenAI.")
+        print(f"Arquivos prontos: {info['file_count']} originais. Modelo: {MODEL}.", flush=True)
         if not os.getenv("OPENAI_API_KEY"):
             raise ValueError("OPENAI_API_KEY não está configurada; nenhum upload realizado.")
         confirm = input("Autoriza upload de todos os arquivos + UMA chamada paga? Digite ENVIAR: ")
