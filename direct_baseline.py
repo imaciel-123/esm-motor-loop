@@ -240,9 +240,12 @@ def main() -> int:
         return 0
     try:
         info = scan(args.dir, args.question)
-        print_preview(info)
         if not args.execute:
+            print_preview(info)
             return 0
+        print("Arquivos validados localmente:", info["file_count"])
+        print("Modelo:", MODEL)
+        print("A próxima etapa enviará os arquivos originais à OpenAI.")
         if not os.getenv("OPENAI_API_KEY"):
             raise ValueError("OPENAI_API_KEY não está configurada; nenhum upload realizado.")
         confirm = input("Autoriza upload de todos os arquivos + UMA chamada paga? Digite ENVIAR: ")
