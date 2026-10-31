@@ -156,6 +156,26 @@ def cleanup(client, record: dict, manifest_path: Path) -> None:
             save_json(manifest_path, record)
 
 
+def api_failure_details(exc: Exception) -> dict:
+    """Registra detalhes do erro de API APENAS no resultado local (ignorado pelo Git)."""
+    body = getattr(exc, "body", None)
+    error = body.get("error", body) if isinstance(body, dict) else {}
+    if not isinstance(error, dict):
+        error = {}
+    def field(key):
+        value = error.get(key) or getattr(exc, key, None)
+        return value if isinstance(value, (str, int, float, bool)) else None
+    return {
+        "exception": type(exc).__name__,
+        "http_status": getattr(exc, "status_code", None),
+        "request_id": getattr(exc, "request_id", None),
+        "code": field("code"),
+        "param": field("param"),
+        "api_type": field("type"),
+        "message": field("message") or str(exc),
+    }
+
+
 def run(preflight: dict, folder: Path, out: Path, client) -> Path:
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid4().hex[:8]
     dest = out / run_id
@@ -203,8 +223,13 @@ def run(preflight: dict, folder: Path, out: Path, client) -> Path:
     except Exception as exc:
         state["status"] = "error-possibly-charged" if state["calls_inference_attempted"] else "error-before-inference"
         state["error_type"] = type(exc).__name__
+        state["api_error"] = api_failure_details(exc)
         save_json(dest / "execucao.json", state)
-        print(f"ERRO ({type(exc).__name__}). Não repita a execução automaticamente; confira {dest}.", file=sys.stderr)
+        error = state["api_error"]
+        print(f"ERRO DA API: HTTP {error['http_status']} | código {error['code']} | campo {error['param']}", file=sys.stderr)
+        print(f"MENSAGEM DA API: {error['message']}", file=sys.stderr)
+        print(f"Diagnóstico gravado em {dest / 'execucao.json'}", file=sys.stderr)
+        print("Não repita a execução antes de interpretar o erro.", file=sys.stderr)
         raise
     finally:
         cleanup(client, manifest, dest / "manifest.json")
