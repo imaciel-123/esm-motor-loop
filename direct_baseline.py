@@ -176,6 +176,15 @@ def api_failure_details(exc: Exception) -> dict:
     }
 
 
+# Tipos de código que não constam como extensões próprias no contrato de input_file.
+# Só o NOME do upload muda; os bytes e SHA-256 da fonte original permanecem iguais.
+TEXT_UPLOAD_ALIAS_SUFFIXES = {".ts", ".tsx", ".jsx"}
+
+
+def upload_filename(path: Path) -> str:
+    return path.name + ".txt" if path.suffix.lower() in TEXT_UPLOAD_ALIAS_SUFFIXES else path.name
+
+
 def run(preflight: dict, folder: Path, out: Path, client) -> Path:
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid4().hex[:8]
     dest = out / run_id
@@ -193,9 +202,15 @@ def run(preflight: dict, folder: Path, out: Path, client) -> Path:
             source = folder / item["path"]
             if not source.is_file() or source.is_symlink() or sha256(source.read_bytes()) != item["sha256"]:
                 raise ValueError(f"Arquivo mudou desde preflight: {item['path']}")
+            alias = upload_filename(source)
             with source.open("rb") as handle:
-                remote = client.files.create(file=handle, purpose="user_data")
+                if alias != source.name:
+                    remote = client.files.create(
+                        file=(alias, handle, "text/plain"), purpose="user_data")
+                else:
+                    remote = client.files.create(file=handle, purpose="user_data")
             manifest["uploads"].append({"name": item["name"], "path": item["path"],
+                                         "uploaded_filename": alias,
                                          "sha256": item["sha256"], "file_id": remote.id,
                                          "delete_status": "pending", "uploaded_at": utc()})
             save_json(dest / "manifest.json", manifest)
@@ -204,6 +219,17 @@ def run(preflight: dict, folder: Path, out: Path, client) -> Path:
             print(f"Upload {len(manifest['uploads'])}/{preflight['file_count']}: {item['name']}", flush=True)
         request = payload([u["file_id"] for u in manifest["uploads"]], preflight["question"])
         save_json(dest / "request.json", request)
+        # Validar parsing/contexto ANTES da chamada gerativa. Não invoca inferência.
+        # A contagem usa os mesmos input_file e instructions da chamada definitiva.
+        state["status"] = "validating-input-tokens"
+        save_json(dest / "execucao.json", state)
+        counted = client.responses.input_tokens.count(
+            model=MODEL, input=request["input"],
+            instructions=request["instructions"], reasoning=request["reasoning"])
+        state["estimated_input_tokens"] = counted.input_tokens
+        state["status"] = "input-validated"
+        save_json(dest / "execucao.json", state)
+        print(f"Entrada aceita para contagem: {counted.input_tokens} tokens.", flush=True)
         state["status"] = "inference-request-sent-outcome-unknown"
         state["calls_inference_attempted"] = 1
         state["sent_at"] = utc()
