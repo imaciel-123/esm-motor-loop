@@ -179,9 +179,10 @@ def build(folder, jira_zip, client):
                 count_commits += len(data)
                 if not data:
                     raise ValueError(f"PR {pr} sem commits")
-            if data:
-                record_json(folder, manifest, prefix+"_"+kind+".json",
-                            "https://api.github.com/repos/"+REPO+path, data)
+            # Preservar listas vazias como observações da API no momento consultado.
+            # Zero reviews nativos consultados não prova ausência de reviews externos.
+            record_json(folder, manifest, prefix+"_"+kind+".json",
+                        "https://api.github.com/repos/"+REPO+path, data)
         runs_data = client.get("/actions/runs",
                                {"head_sha": head, "per_page": 100, "event": "pull_request"})
         runs = runs_data.get("workflow_runs", [])
