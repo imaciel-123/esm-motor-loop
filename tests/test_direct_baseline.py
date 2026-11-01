@@ -14,7 +14,7 @@ class FakeFiles:
 
     def create(self, file, purpose):
         assert purpose == "user_data"
-        self.created.append(file.name)
+        self.created.append(file[0] if isinstance(file, tuple) else file.name)
         return SimpleNamespace(id=f"file-{len(self.created)}")
 
     def delete(self, file_id):
@@ -33,7 +33,13 @@ class FakeResponse:
 class FakeResponses:
     def __init__(self, fails=False):
         self.calls = []
+        self.count_calls = []
         self.fails = fails
+        self.input_tokens = SimpleNamespace(count=self.count)
+
+    def count(self, **request):
+        self.count_calls.append(request)
+        return SimpleNamespace(input_tokens=1234)
 
     def create(self, **request):
         self.calls.append(request)
@@ -81,6 +87,33 @@ class DirectBaselineTests(unittest.TestCase):
         self.assertEqual(fake.files.deleted, ["file-1", "file-2"])
         self.assertEqual((result / "resposta.md").read_text(encoding="utf-8"), "Análise direta, sem gabarito.\n")
         self.assertEqual(json.loads((result / "execucao.json").read_text())["status"], "completed")
+
+    def test_typescript_upload_keeps_bytes_and_uses_text_alias(self):
+        path = self.src / "glossary.ts"
+        original = b"export const x = 123;\n"
+        path.write_bytes(original)
+        fake = FakeClient()
+        result = b.run(b.scan(self.src, self.question), self.src, self.out, fake)
+        self.assertEqual(len(fake.responses.count_calls), 1)
+        self.assertEqual(len(fake.responses.calls), 1)
+        self.assertIn("glossary.ts.txt", fake.files.created)
+        self.assertEqual(path.read_bytes(), original)
+        uploads = json.loads((result / "manifest.json").read_text())["uploads"]
+        entry = next(x for x in uploads if x["name"] == "glossary.ts")
+        self.assertEqual(entry["uploaded_filename"], "glossary.ts.txt")
+        self.assertEqual(entry["sha256"], b.sha256(original))
+
+    def test_input_token_rejection_stops_before_paid_inference(self):
+        fake = FakeClient()
+        def reject(**request):
+            raise ValueError("invalid-input")
+        fake.responses.input_tokens.count = reject
+        with self.assertRaisesRegex(ValueError, "invalid-input"):
+            b.run(b.scan(self.src, self.question), self.src, self.out, fake)
+        self.assertEqual(fake.responses.calls, [])
+        self.assertEqual(fake.files.deleted, ["file-1", "file-2"])
+        state = json.loads((next(self.out.iterdir()) / "execucao.json").read_text())
+        self.assertEqual(state["calls_inference_attempted"], 0)
 
     def test_unsupported_blocks_without_calls(self):
         (self.src / "unknown.exe").write_bytes(b"bin")
