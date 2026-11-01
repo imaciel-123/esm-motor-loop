@@ -144,6 +144,14 @@ def build(folder, jira_zip, client):
             save_source(folder, manifest, name, data,
                         "https://esmodel.atlassian.net/browse/ESM-121",
                         "Snapshot Jira recuperado via conector, sem anexos binários")
+        # Referências conceituais consultadas na investigação original; são
+        # documentos-fonte, não o relatório retrospectivo nem respostas da LLM.
+        for name in sorted(n for n in available if n.startswith("reference/") and not n.endswith("/")):
+            if ".." in Path(name).parts or Path(name).suffix.lower() not in {".docx", ".md", ".txt"}:
+                raise ValueError("Referência inválida no ZIP: " + name)
+            save_source(folder, manifest, name, archive.read(name),
+                        "documento de referência fornecido pelo operador",
+                        "Autoridade conceitual, não prova de eventos da ESM-121")
 
     count_commits = 0
     count_runs = 0
