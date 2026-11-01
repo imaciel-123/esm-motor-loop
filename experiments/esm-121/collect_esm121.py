@@ -122,6 +122,64 @@ def save_source(folder, manifest, path, content, url, note=""):
     })
 
 
+
+def pick(value, keys):
+    """Preserva valores textuais/identificadores originais, sem paráfrase."""
+    return {key: value[key] for key in keys if value.get(key) is not None}
+
+
+def normalize_pr(value):
+    x = pick(value, ("number", "title", "body", "html_url", "state", "merged",
+                      "draft", "created_at", "updated_at", "closed_at", "merged_at",
+                      "merge_commit_sha", "commits", "changed_files", "additions", "deletions"))
+    x["head"] = pick(value.get("head") or {}, ("sha", "ref"))
+    x["base"] = pick(value.get("base") or {}, ("sha", "ref"))
+    x["user"] = pick(value.get("user") or {}, ("login",))
+    return x
+
+
+def normalize_list(kind, items):
+    out = []
+    for value in items:
+        if kind == "commits":
+            x = pick(value, ("sha", "html_url"))
+            x["commit"] = pick(value.get("commit") or {}, ("message",))
+            commit = value.get("commit") or {}
+            x["author_date"] = (commit.get("author") or {}).get("date")
+            x["committer_date"] = (commit.get("committer") or {}).get("date")
+            x["parents"] = [p.get("sha") for p in value.get("parents", [])]
+        elif kind == "files":
+            x = pick(value, ("filename", "previous_filename", "status", "additions",
+                             "deletions", "changes", "patch", "blob_url", "raw_url"))
+        elif kind == "reviews":
+            x = pick(value, ("id", "body", "state", "submitted_at", "commit_id", "html_url"))
+            x["user"] = (value.get("user") or {}).get("login")
+        else:
+            x = pick(value, ("id", "body", "path", "line", "original_line", "diff_hunk",
+                             "commit_id", "created_at", "updated_at", "html_url"))
+            x["user"] = (value.get("user") or {}).get("login")
+        out.append(x)
+    return out
+
+
+def normalize_runs(items):
+    return [dict(pick(x, ("id", "name", "display_title", "event", "status", "conclusion",
+                          "head_sha", "head_branch", "run_attempt", "html_url",
+                          "created_at", "updated_at")),
+                 actor=(x.get("actor") or {}).get("login")) for x in items]
+
+
+def normalize_jobs(value):
+    return {"total_count": value.get("total_count"),
+            "jobs": [dict(pick(j, ("id", "name", "status", "conclusion",
+                                   "started_at", "completed_at", "html_url")),
+                          steps=[pick(step, ("name", "status", "conclusion",
+                                             "number", "started_at", "completed_at"))
+                                 for step in j.get("steps", [])])
+                     for j in value.get("jobs", [])]}
+
+
+
 def record_json(folder, manifest, name, url, content):
     if content is None:
         # Ausência explicitada no ledger, não transformar ausência em fonte vazia.
@@ -165,7 +223,7 @@ def build(folder, jira_zip, client):
         merged = pr_data.get("merge_commit_sha")
         if not head or not merged:
             raise ValueError(f"Sem SHA head/merge na PR {pr}")
-        record_json(folder, manifest, prefix+"_PR.json", pr_data["html_url"], pr_data)
+        record_json(folder, manifest, prefix+"_PR.json", pr_data["html_url"], normalize_pr(pr_data))
         related = [
             ("commits", f"/pulls/{pr}/commits"),
             ("files", f"/pulls/{pr}/files"),
@@ -182,7 +240,7 @@ def build(folder, jira_zip, client):
             # Preservar listas vazias como observações da API no momento consultado.
             # Zero reviews nativos consultados não prova ausência de reviews externos.
             record_json(folder, manifest, prefix+"_"+kind+".json",
-                        "https://api.github.com/repos/"+REPO+path, data)
+                        "https://api.github.com/repos/"+REPO+path, normalize_list(kind, data))
         runs_data = client.get("/actions/runs",
                                {"head_sha": head, "per_page": 100, "event": "pull_request"})
         runs = runs_data.get("workflow_runs", [])
@@ -190,14 +248,14 @@ def build(folder, jira_zip, client):
         record_json(folder, manifest, prefix+"_workflow_runs.json",
                     f"https://github.com/{REPO}/actions", {
                         "head_sha": head, "run_count": len(runs),
-                        "workflow_runs": runs
+                        "workflow_runs": normalize_runs(runs)
                     })
         for run in runs:
             jobs = client.get(f"/actions/runs/{run['id']}/jobs", optional=True)
             if jobs is not None:
                 record_json(folder, manifest, f"{prefix}_workflow_jobs_{run['id']}.json",
                             run.get("html_url", f"https://github.com/{REPO}/actions"),
-                            jobs)
+                            normalize_jobs(jobs))
         print(f"PR #{pr}: commits, diff/arquivos, reviews e workflows recuperados", flush=True)
 
     # Duas fotografias históricas para testar o caso de regressão na PR #221,
