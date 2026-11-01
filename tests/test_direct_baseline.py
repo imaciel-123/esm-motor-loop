@@ -110,6 +110,24 @@ class DirectBaselineTests(unittest.TestCase):
         target = next(self.out.iterdir())
         self.assertEqual(json.loads((target / "execucao.json").read_text())["status"], "error-possibly-charged")
 
+    def test_bad_request_records_message_without_retry(self):
+        fake = FakeClient()
+        class FakeBadRequest(Exception):
+            status_code = 400
+            request_id = "req-test"
+            body = {"message": "Example validation error", "code": "invalid_request_error", "param": "input"}
+        def reject(**request):
+            fake.responses.calls.append(request)
+            raise FakeBadRequest("BadRequest")
+        fake.responses.create = reject
+        with self.assertRaises(FakeBadRequest):
+            b.run(b.scan(self.src, self.question), self.src, self.out, fake)
+        self.assertEqual(len(fake.responses.calls), 1)
+        status = json.loads((next(self.out.iterdir()) / "execucao.json").read_text(encoding="utf-8"))
+        self.assertEqual(status["api_error"]["http_status"], 400)
+        self.assertEqual(status["api_error"]["param"], "input")
+        self.assertEqual(status["api_error"]["message"], "Example validation error")
+
     def test_changed_file_blocks_before_upload(self):
         info = b.scan(self.src, self.question)
         (self.src / "a.md").write_text("Modificado.", encoding="utf-8")
