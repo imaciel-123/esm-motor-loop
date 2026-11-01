@@ -1,9 +1,9 @@
 name: Unit tests (offline)
 on:
   push:
-    branches: [feat/direct-file-baseline]
+    branches: [feat/direct-file-baseline, feat/esm121-comparable-corpus]
   pull_request:
-    branches: [main]
+    branches: [main, feat/direct-file-baseline]
 jobs:
   offline-tests:
     runs-on: ubuntu-latest
@@ -12,5 +12,5 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.14'
-      - run: python -m py_compile direct_baseline.py
+      - run: python -m py_compile direct_baseline.py experiments/esm-121/collect_esm121.py
       - run: python -m unittest discover -s tests -v
