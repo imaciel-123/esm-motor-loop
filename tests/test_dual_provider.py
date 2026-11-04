@@ -84,7 +84,17 @@ class DualProviderTests(unittest.TestCase):
             p = self.folder / old
             q = self.folder / new
             q.parent.mkdir(parents=True, exist_ok=True)
-            p.rename(q)
+            if new.endswith(".docx"):
+                payload = io.BytesIO()
+                with zipfile.ZipFile(payload, "w") as doc:
+                    doc.writestr("word/document.xml",
+                                 '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                                 '<w:body><w:p><w:r><w:t>Referência interna</w:t></w:r></w:p></w:body></w:document>')
+                q.write_bytes(payload.getvalue())
+                p.unlink()
+                rec["sha256"] = m.digest(payload.getvalue())
+            else:
+                p.rename(q)
             rec["path"] = new
         m.save(self.folder / "selecao_53_sem_reupload.json",
                {"selecionados": 53, "excluidos": 45, "arquivos": self.entries})
