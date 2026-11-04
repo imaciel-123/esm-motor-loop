@@ -72,7 +72,7 @@ class DualProviderTests(unittest.TestCase):
                 return {"input_tokens": 180000}
             if url.endswith("/count_tokens"):
                 self.assertEqual(len(body["messages"][0]["content"]), 54)
-                self.assertEqual(body["messages"][0]["content"][0]["source"]["type"], "file")
+                self.assertEqual(body["messages"][0]["content"][0]["type"], "text")
                 return {"input_tokens": 181000}
             if url.endswith("/responses"):
                 self.assertEqual(len(body["input"][0]["content"]), 54)
@@ -121,6 +121,100 @@ class DualProviderTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "SHA256"):
                 m.prepare(self.folder, self.entries)
             upload.assert_not_called()
+
+    def test_master_request_paths_and_isolation(self):
+        state = self.ready()
+        source = self.folder / "master.txt"
+        sample = b"Master test content with concepts"
+        source.write_bytes(sample)
+        with patch.object(m, "MASTER_SHA256", m.digest(sample)):
+            with patch.object(m, "upload_claude", return_value="file_claude_master"), patch("builtins.print"):
+                m.stage_master(self.folder, state, source)
+            state = m.prepared(self.folder, self.entries, with_master=True)
+            oai, claude = m.requests(self.entries, state, self.text, self.model,
+                                     self.output, with_master=True)
+            self.assertEqual(len(oai["input"][0]["content"]), 54)  # 53 fontes + pergunta
+            self.assertEqual(oai["tools"][0]["vector_store_ids"], [m.MASTER_STORE])
+            self.assertEqual(oai["tool_choice"], "required")
+            self.assertEqual(oai["include"], ["file_search_call.results"])
+            self.assertEqual(len(claude["messages"][0]["content"]), 55)  # 53 + Master + pergunta
+            self.assertEqual(claude["messages"][0]["content"][-2]["source"]["file_id"],
+                             "file_claude_master")
+            surrogate = m.claude_count_payload(self.folder, self.entries,
+                                               self.text, self.model, True)
+            self.assertEqual(len(surrogate["messages"][0]["content"]), 55)
+            self.assertEqual(surrogate["messages"][0]["content"][-2]["type"], "text")
+            self.assertEqual(m.result_folder(self.folder, True).name, "com_master")
+            self.assertNotEqual(m.experiment_identity(self.entries, False),
+                                m.experiment_identity(self.entries, True))
+
+    def test_master_wrong_hash_blocks_upload(self):
+        self.ready()
+        source = self.folder / "bad-master.txt"
+        source.write_bytes(b"not the approved Master")
+        with patch.object(m, "upload_claude") as uploaded, patch("builtins.print"):
+            with self.assertRaisesRegex(RuntimeError, "SHA-256"):
+                m.prepare(self.folder, self.entries, with_master=True, master_txt=source)
+            uploaded.assert_not_called()
+
+    def test_openai_master_verification_checks_bytes_and_index(self):
+        sample = b"Master test content"
+        observed = []
+        def fake_api(url, method, headers, body=None, raw=False, timeout=600):
+            observed.append(url)
+            if url.endswith(m.MASTER_STORE):
+                return {"status": "completed", "file_counts": {"failed": 0}}
+            if url.endswith("/files?limit=100"):
+                return {"data": [{"id": m.MASTER_OPENAI_FILE, "status": "completed"}]}
+            if url.endswith("/files/" + m.MASTER_OPENAI_FILE):
+                return {"filename": m.MASTER_NAME}
+            if url.endswith("/files/" + m.MASTER_OPENAI_FILE + "/content"):
+                return sample
+            raise AssertionError(url)
+        with patch.object(m, "MASTER_SHA256", m.digest(sample)):
+            with patch.object(m, "api", side_effect=fake_api), patch.object(m, "auth", return_value={}):
+                m.verify_openai_master()
+            with patch.object(m, "api", side_effect=lambda *a, **kw: b"tampered"
+                              if a[0].endswith("/content") else fake_api(*a, **kw)), \
+                 patch.object(m, "auth", return_value={}):
+                with self.assertRaisesRegex(RuntimeError, "SHA-256"):
+                    m.verify_openai_master()
+        self.assertEqual(len(observed), 4)
+
+    def test_master_preflight_and_missing_retrieval_block_retry(self):
+        state = self.ready()
+        sample = b"Master reasoning sample"
+        source = self.folder / "master.txt"
+        source.write_bytes(sample)
+        with patch.object(m, "MASTER_SHA256", m.digest(sample)):
+            with patch.object(m, "upload_claude", return_value="file_master"), patch("builtins.print"):
+                m.stage_master(self.folder, state, source)
+            state = m.prepared(self.folder, self.entries, with_master=True)
+            def fake_api(url, method, headers, body=None, raw=False, timeout=600):
+                if url.endswith("/input_tokens"):
+                    self.assertEqual(body["tools"][0]["vector_store_ids"], [m.MASTER_STORE])
+                    return {"input_tokens": 180000}
+                if url.endswith("/count_tokens"):
+                    self.assertEqual(body["messages"][0]["content"][-2]["type"], "text")
+                    return {"input_tokens": 360000}
+                if url.endswith("/responses"):
+                    return {"id": "resp-test", "status": "completed", "model": m.MODEL_OPENAI,
+                            "output": [{"type": "message", "content": [
+                                {"type": "output_text", "text": "Without retrieval"}]}]}
+                raise AssertionError(url)
+            with patch.object(m, "verify_openai_master"), \
+                 patch.object(m, "api", side_effect=fake_api), \
+                 patch.object(m, "auth", return_value={}), patch("builtins.print"):
+                m.preflight(self.folder, self.entries, state, self.text, self.model,
+                            self.output, self.budget, with_master=True,
+                            search_token_reserve=20000)
+                self.assertTrue((m.result_folder(self.folder, True) / "preflight.json").exists())
+                with self.assertRaisesRegex(RuntimeError, "sem resultado recuperado"):
+                    m.run_one(self.folder, self.entries, state, self.text,
+                              self.model, self.output, self.budget, "openai",
+                              with_master=True, search_token_reserve=20000)
+            self.assertTrue((m.result_folder(self.folder, True) / "openai.pending.json").exists())
+            self.assertTrue((m.result_folder(self.folder, True) / "openai_response.json").exists())
 
 if __name__ == "__main__":
     unittest.main()
