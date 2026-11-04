@@ -76,6 +76,65 @@ class DualProviderTests(unittest.TestCase):
         # Identificador confirmado pelo operador na Vector Store 'master' em 04/11/2026.
         self.assertEqual(m.MASTER_OPENAI_FILE, "file-2J9CuGsQXaiuGG9Mn35ebu")
 
+    def test_claude_50_no_references_or_master_and_no_openai_or_upload(self):
+        # O teste muda apenas os nomes fictícios do corpus de teste.
+        original = ("reference/0.md", "reference/1.md", "reference/2.md")
+        for old, new in zip(original, m.ALL_REFERENCE_PATHS):
+            rec = next(e for e in self.entries if e["path"] == old)
+            p = self.folder / old
+            q = self.folder / new
+            q.parent.mkdir(parents=True, exist_ok=True)
+            p.rename(q)
+            rec["path"] = new
+        m.save(self.folder / "selecao_53_sem_reupload.json",
+               {"selecionados": 53, "excluidos": 45, "arquivos": self.entries})
+        state = self.ready()
+        active = m.active_selection(self.entries, claude_50_only=True)
+        self.assertEqual(len(active), 50)
+        self.assertEqual(len(self.entries), 53)
+        self.assertTrue(all(not e["path"].startswith("reference/") for e in active))
+        self.assertEqual(len(state["files"]), 53)
+
+        question = self.folder / "questions.md"
+        question.write_text("Investigar a Change ESM-121", encoding="utf-8")
+        calls = []
+        def fake_api(url, method, headers, body=None, raw=False, timeout=600):
+            calls.append((url, body))
+            if url.endswith("/messages"):
+                docs = body["messages"][0]["content"][:-1]
+                self.assertEqual(len(docs), 50)
+                self.assertEqual(len(body["messages"][0]["content"]), 51)
+                self.assertTrue(all(d["type"] == "document" for d in docs))
+                self.assertTrue(all(not d["title"].startswith("reference/") for d in docs))
+                self.assertTrue(all(d["source"]["file_id"] != state["master"]["file_id"]
+                                    for d in docs) if "master" in state else True)
+                self.assertNotIn("Master 1.5.1", body["system"])
+                return {"id": "msg-50", "stop_reason": "end_turn",
+                        "model": self.model, "content": [{"type": "text", "text": "Conclusão Claude"}]}
+            raise AssertionError("API indevida: " + url)
+        old_openai = m.result_folder(self.folder, True, True) / "openai_response.json"
+        m.save(old_openai, {"id": "resp-ja-concluida"})
+        with patch.object(m, "api", side_effect=fake_api), patch.object(m, "auth", return_value={}), \
+             patch.object(m, "upload_claude") as upload, patch("builtins.print"):
+            m.main(["claude", "--claude-50-only", "--folder", str(self.folder),
+                    "--questions", str(question), "--max-output-tokens", "12000", "--execute"])
+            upload.assert_not_called()
+            with self.assertRaisesRegex(RuntimeError, "repetir"):
+                m.main(["claude", "--claude-50-only", "--folder", str(self.folder),
+                        "--questions", str(question), "--max-output-tokens", "12000", "--execute"])
+        self.assertEqual([url for url, _ in calls], [m.ANTHROPIC + "/messages"])
+        self.assertEqual(m.read_json(old_openai)["id"], "resp-ja-concluida")
+        self.assertTrue((m.result_folder(self.folder, False, claude_50_only=True) /
+                         "claude_response.md").is_file())
+
+    def test_claude_50_rejects_master_or_both(self):
+        with self.assertRaises(SystemExit):
+            m.main(["both", "--claude-50-only", "--max-output-tokens", "12000", "--execute",
+                    "--folder", str(self.folder)])
+        with self.assertRaises(SystemExit):
+            m.main(["claude", "--claude-50-only", "--with-master",
+                    "--max-output-tokens", "12000", "--execute", "--folder", str(self.folder)])
+
     def test_selection_validates_53_existing_ids(self):
         self.assertEqual(len(m.selection(self.folder)), 53)
         self.assertEqual(len({e["file_id"] for e in m.selection(self.folder)}), 53)
