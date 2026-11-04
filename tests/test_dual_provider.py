@@ -181,6 +181,23 @@ class DualProviderTests(unittest.TestCase):
                     m.verify_openai_master()
         self.assertGreaterEqual(len(observed), 4)
 
+    def test_claude_master_metadata_must_match_prepared_bytes(self):
+        state = self.ready()
+        sample = b"master sample"
+        path = self.folder / "master.txt"
+        path.write_bytes(sample)
+        with patch.object(m, "MASTER_SHA256", m.digest(sample)):
+            with patch.object(m, "upload_claude", return_value="file_master"), patch("builtins.print"):
+                m.stage_master(self.folder, state, path)
+            state = m.prepared(self.folder, self.entries, with_master=True)
+            remote = {"id": "file_master", "filename": m.MASTER_NAME, "size_bytes": len(sample)}
+            with patch.object(m, "api", return_value=remote), patch.object(m, "auth", return_value={}):
+                m.verify_claude_master(state, self.folder)
+            with patch.object(m, "api", return_value={**remote, "size_bytes": 0}), \
+                 patch.object(m, "auth", return_value={}):
+                with self.assertRaisesRegex(RuntimeError, "tamanho divergente"):
+                    m.verify_claude_master(state, self.folder)
+
     def test_master_preflight_and_missing_retrieval_block_retry(self):
         state = self.ready()
         sample = b"Master reasoning sample"
@@ -203,6 +220,7 @@ class DualProviderTests(unittest.TestCase):
                                 {"type": "output_text", "text": "Without retrieval"}]}]}
                 raise AssertionError(url)
             with patch.object(m, "verify_openai_master"), \
+                 patch.object(m, "verify_claude_master"), \
                  patch.object(m, "api", side_effect=fake_api), \
                  patch.object(m, "auth", return_value={}), patch("builtins.print"):
                 m.preflight(self.folder, self.entries, state, self.text, self.model,
