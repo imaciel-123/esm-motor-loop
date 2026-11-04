@@ -206,6 +206,15 @@ def verify_openai_master():
     original = api(f"{OPENAI}/files/{MASTER_OPENAI_FILE}/content", "GET", headers, raw=True)
     validate_master(original)
 
+def verify_claude_master(state, folder):
+    """Confere metadados do arquivo previamente enviado à Anthropic; sem inferência."""
+    saved = state["master"]
+    metadata = api(f"{ANTHROPIC}/files/{saved['file_id']}", "GET", auth("claude"))
+    if (metadata.get("id") != saved["file_id"] or
+            metadata.get("filename") != MASTER_NAME or
+            metadata.get("size_bytes") != master_cache(folder).stat().st_size):
+        raise RuntimeError("Master no Claude ausente, renomeado ou com tamanho divergente")
+
 def prepare(folder, entries, with_master=False, master_txt=None):
     path = folder / "comparacao_h0_teste3" / "claude_files.json"
     state = read_json(path) if path.is_file() else {"corpus_id": identity(entries), "files": {}}
@@ -288,6 +297,7 @@ def preflight(folder, entries, state, text, model, output_tokens, budget,
         if search_token_reserve is None or search_token_reserve <= 0:
             raise RuntimeError("Informe --search-token-reserve; a recuperação file_search é dinâmica")
         verify_openai_master()
+        verify_claude_master(state, folder)
     oai, claude = requests(entries, state, text, model, output_tokens, with_master)
     count_oai = api(OPENAI + "/responses/input_tokens", "POST",
                     {**auth("openai"), "Content-Type": "application/json"},
