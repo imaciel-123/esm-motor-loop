@@ -328,9 +328,10 @@ def requests(entries, state, text, model, output_tokens, with_master=False):
               "messages": [{"role": "user", "content": docs + [{"type": "text", "text": text}]}]}
     return openai, claude
 
-def claude_count_payload(folder, entries, text, model, with_master):
+def claude_count_payload(folder, entries, text, model, with_master, state=None):
     """count_tokens não suporta document source=file; estimativa via mesmos bytes inline."""
-    state = prepared(folder, entries, with_master=with_master)
+    if state is None:
+        state = prepared(folder, entries, with_master=with_master)
     parts = []
     for e in entries:
         content = Path(state["files"][e["path"]]["cache"]).read_bytes().decode("utf-8-sig")
@@ -355,7 +356,7 @@ def preflight(folder, entries, state, text, model, output_tokens, budget,
                     {**auth("openai"), "Content-Type": "application/json"},
                     {k: v for k, v in oai.items() if k != "max_output_tokens"})["input_tokens"]
     # A API Anthropic não aceita source=file em count_tokens. Usa os mesmos bytes TXT inline.
-    surrogate = claude_count_payload(folder, entries, text, model, with_master)
+    surrogate = claude_count_payload(folder, entries, text, model, with_master, state=state)
     count_claude = api(ANTHROPIC + "/messages/count_tokens", "POST",
                        {**auth("claude"), "Content-Type": "application/json"},
                        surrogate)["input_tokens"]
@@ -377,7 +378,7 @@ def preflight(folder, entries, state, text, model, output_tokens, budget,
              + output_tokens * CLAUDE_RATES[model][1]) / 1e6, 4)}
     result = {
         "experiment_id": experiment_identity(entries, with_master),
-        "mode": "53+master" if with_master else "53-only",
+        "mode": f"{len(entries)}+master" if with_master else f"{len(entries)}-only",
         "corpus_id": identity(entries), "prompt_sha256": digest(text.encode()),
         "model_claude": model, "output_tokens": output_tokens, "budget_usd": budget,
         "search_token_reserve": search_token_reserve if with_master else None,
