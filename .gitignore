@@ -1,0 +1,10 @@
+# Documentos enviados e resultados: nunca subir ao repositório público
+data/
+.env
+.env.*
+*.key
+__pycache__/
+.pytest_cache/
+.venv/
+venv/
+*.pyc
