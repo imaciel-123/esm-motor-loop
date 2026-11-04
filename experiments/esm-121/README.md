@@ -47,3 +47,24 @@ Como antes, é obrigatório informar OPENAI_API_KEY no ambiente e digitar ENVIAR
 As diferenças de modelo, temporização, conjunto de ferramentas e materiais indisponíveis serão declaradas; não alegar experimento controlado perfeito.
 
 **A PR contém só código e a pergunta; fontes Jira, PRs privados e resultados permanecem fora do Git.**
+
+## Teste H0 número 3 — comparação OpenAI × Claude sem novo upload na OpenAI
+
+A implementação adicionada em `dual_provider.py` é distinta do experimento histórico de pergunta original. Ela lê o manifesto da seleção validada em `data/results/esm121-h0-revisado/20261102T133522Z/selecao_53_sem_reupload.json`, **reutiliza os 53 IDs existentes da OpenAI**, recupera e confere os bytes das fontes por SHA-256 e prepara a mesma seleção na Files API do Claude. Nenhuma fonte ou resposta é commitada (`data/` fica fora do Git).
+
+Arquivos DOCX são extraídos para texto antes do envio ao Claude (imagens e elementos não textuais podem ficar fora do corpus Claude). Essa diferença de representação fica registrada com hashes de origem e texto preparado; não alegar equivalência perfeita de parser entre provedores.
+
+Com as chaves definidas apenas no ambiente e o manifesto local presente:
+
+```powershell
+py -3 experiments/esm-121/dual_provider.py prepare
+py -3 experiments/esm-121/dual_provider.py preflight --max-output-tokens 24000 --budget-usd 5
+py -3 experiments/esm-121/dual_provider.py both --max-output-tokens 24000 --budget-usd 5 --execute
+py -3 experiments/esm-121/dual_provider.py compare
+```
+
+**Os valores 24.000 e US$ 5 são somente exemplos, não limites escolhidos pelo projeto.** A pessoa operadora deve escolher explicitamente orçamento e limite de saída antes do preflight; uma estimativa não constitui teto absoluto de cobrança. A execução paga exige `--execute` e um preflight compatível. O executor conserva resposta, metadados, tokens e marcadores de chamada em `data/`; uma chamada de resultado incerto nunca é repetida automaticamente.
+
+`prepare` envia as fontes à Anthropic, mas não executa inferência. Não faz upload, exclusão ou alteração de arquivos na OpenAI. Verificar a política de dados aplicável antes de enviar documentos a um segundo provedor.
+
+**Limite de validação:** testes automáticos offline não substituem um ensaio real de integração com chaves e corpus válidos. Uma falha de acesso à API ou incompatibilidade de formatos deve bloquear a inferência; nunca ajustar silenciosamente os 53 arquivos.
