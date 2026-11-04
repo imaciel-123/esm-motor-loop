@@ -244,18 +244,43 @@ def prepared(folder, entries, with_master=False):
         validate_master(master_cache(folder).read_bytes())
     return state
 
-def requests(entries, state, text, model, output_tokens):
+def requests(entries, state, text, model, output_tokens, with_master=False):
     input_openai = ([{"type": "input_file", "file_id": e["file_id"]} for e in entries] +
                     [{"type": "input_text", "text": text}])
+    instructions = SYSTEM + (" " + MASTER_GUIDANCE if with_master else "")
     openai = {"model": MODEL_OPENAI, "reasoning": {"effort": "medium"},
-              "instructions": SYSTEM, "max_output_tokens": output_tokens,
+              "instructions": instructions, "max_output_tokens": output_tokens,
               "input": [{"role": "user", "content": input_openai}]}
+    if with_master:
+        openai["tools"] = [{"type": "file_search", "vector_store_ids": [MASTER_STORE]}]
+        openai["tool_choice"] = "required"
+        openai["include"] = ["file_search_call.results"]
     docs = [{"type": "document",
              "source": {"type": "file", "file_id": state["files"][e["path"]]["file_id"]},
              "title": e["path"]} for e in entries]
+    if with_master:
+        docs.append({"type": "document",
+                     "source": {"type": "file", "file_id": state["master"]["file_id"]},
+                     "title": MASTER_NAME})
     claude = {"model": model, "max_tokens": output_tokens, "output_config": {"effort": "medium"},
-              "system": SYSTEM, "messages": [{"role": "user", "content": docs + [{"type": "text", "text": text}]}]}
+              "system": instructions,
+              "messages": [{"role": "user", "content": docs + [{"type": "text", "text": text}]}]}
     return openai, claude
+
+def claude_count_payload(folder, entries, text, model, with_master):
+    """count_tokens não suporta document source=file; estimativa via mesmos bytes inline."""
+    state = prepared(folder, entries, with_master=with_master)
+    parts = []
+    for e in entries:
+        content = Path(state["files"][e["path"]]["cache"]).read_bytes().decode("utf-8-sig")
+        parts.append({"type": "text", "text": "[Fonte: " + e["path"] + "]\n" + content})
+    if with_master:
+        parts.append({"type": "text", "text": "[Fonte: " + MASTER_NAME + "]\n" +
+                      master_cache(folder).read_text(encoding="utf-8")})
+    parts.append({"type": "text", "text": text})
+    instructions = SYSTEM + (" " + MASTER_GUIDANCE if with_master else "")
+    return {"model": model, "system": instructions, "output_config": {"effort": "medium"},
+            "messages": [{"role": "user", "content": parts}]}
 
 def preflight(folder, entries, state, text, model, output_tokens, budget):
     oai, claude = requests(entries, state, text, model, output_tokens)
