@@ -112,3 +112,15 @@ Antes de qualquer nova chamada paga, confirmar os IDs/estado da versão correta 
 Uma tentativa anterior pode ter deixado `com_master/openai.pending.json`; não remover.
 
 **Atualização 04/11/2026:** depois da exclusão de uma versão duplicada do Master, o usuário confirmou na interface Storage que a mesma Vector Store contém o arquivo `file-2J9CuGsQXaiuGG9Mn35ebu` (7 MB de índice). O identificador anterior não corresponde mais ao arquivo anexado. A presença na interface não equivale à prova do SHA-256 remoto dos bytes originais; o SHA local do TXT permanece o valor declarado. Não é necessário novo upload para corrigir a referência.
+
+## Claude isolado: 50 fontes, sem referências e sem Master (04/11/2026)
+
+Após o resultado OpenAI já concluído no recorte anterior, o operador excluiu da Anthropic os **três** documentos sob `reference/` e o Master. Para prosseguir **somente no Claude**, use um recorte específico sem reupload:
+
+```powershell
+python .\experiments\esm-121\dual_provider.py claude --claude-50-only --max-output-tokens 12000 --execute
+```
+
+O recorte usa as **50 fontes restantes** e as observações consolidadas dos 45 itens. Não referencia os três documentos removidos nem o Master, não faz upload e não chama a OpenAI. A referência histórica de 53 arquivos permanece intacta. O `claude_files.json` histórico continua sendo lido para obter os 50 IDs sobreviventes; as exclusões no armazenamento remoto não precisam ser reproduzidas apagando os registros locais. Os resultados do novo recorte ficam em `comparacao_h0_teste3/claude_50_sem_referencias/`, separados da resposta OpenAI já salva em `com_master_51_fontes/` e da tentativa Claude que retornou HTTP 404. O bloqueio de repetição do executor permanece ativo. O resultado Claude sem Master e sem referências **não é comparação experimental estritamente equivalente** ao OpenAI já executado com 51 fontes + Master.
+
+`--claude-50-only` só aceita os comandos `claude` e `compare`; rejeita `--with-master`, `both`, `openai` e `prepare`. O teto de tokens de saída informado é escolha do operador e não garante teto financeiro. Se outro ID remoto tiver sido excluído, a API pode responder 404; não repetir automaticamente.

@@ -29,6 +29,9 @@ REMOVED_REFERENCE_PATHS = (
     "reference/ERENIQ_Governanca_Chats_Codex_v1_3_1.docx",
     "reference/Loop_Operacional_Engineering_System_v1.3.docx",
 )
+ALL_REFERENCE_PATHS = REMOVED_REFERENCE_PATHS + (
+    "reference/Relatorio_Transformacao_Motor_Inteligencia_ESM_2026-10-19.md",
+)
 MASTER_GUIDANCE = (
     "O Master 1.5.1 é referencial conceitual, não evidência factual da ESM-121. "
     "Utilize-o para conceitos pertinentes, distinguindo-os dos fatos comprovados nas 53 fontes. "
@@ -90,8 +93,16 @@ def selection(folder):
         paths.add(path)
     return entries
 
-def active_selection(entries, omit_deleted_references=False):
-    """Derivação explícita 51/53; mantém intacto o manifesto 53/45 original."""
+def active_selection(entries, omit_deleted_references=False, claude_50_only=False):
+    """Deriva recortes de inferência sem alterar o manifesto histórico 53/45."""
+    if claude_50_only:
+        present = {e["path"] for e in entries if e["path"].startswith("reference/")}
+        if present != set(ALL_REFERENCE_PATHS):
+            raise RuntimeError("A seleção não contém exatamente os três documentos de referência esperados")
+        selected = [e for e in entries if e["path"] not in ALL_REFERENCE_PATHS]
+        if len(selected) != 50:
+            raise RuntimeError("Recorte Claude sem referências deve conter 50 fontes")
+        return selected
     if not omit_deleted_references:
         return entries
     removed = [e for e in entries if e["path"] in REMOVED_REFERENCE_PATHS]
@@ -111,8 +122,10 @@ def experiment_identity(entries, with_master):
         return identity(entries)
     return digest((identity(entries) + MASTER_SHA256 + MASTER_STORE + MASTER_OPENAI_FILE).encode())
 
-def result_folder(folder, with_master, omit_deleted_references=False):
+def result_folder(folder, with_master, omit_deleted_references=False, claude_50_only=False):
     root = folder / "comparacao_h0_teste3"
+    if claude_50_only:
+        return root / "claude_50_sem_referencias"
     if omit_deleted_references:
         return root / ("com_master_51_fontes" if with_master else "51_fontes")
     return root / "com_master" if with_master else root
@@ -405,8 +418,9 @@ def preflight(folder, entries, state, text, model, output_tokens, budget,
         raise RuntimeError("Estimativa acima do orçamento; nenhuma inferência efetuada")
 
 def run_one(folder, entries, state, text, model, output_tokens, budget, provider,
-            with_master=False, search_token_reserve=None, omit_deleted_references=False):
-    base = result_folder(folder, with_master, omit_deleted_references)
+            with_master=False, search_token_reserve=None, omit_deleted_references=False,
+            claude_50_only=False):
+    base = result_folder(folder, with_master, omit_deleted_references, claude_50_only)
     target = base / f"{provider}_response.json"
     pending = base / f"{provider}.pending.json"
     if target.exists() or pending.exists():
@@ -457,13 +471,19 @@ def main(argv=None):
     parser.add_argument("--with-master", action="store_true", help="Usa Master conceitual na investigação")
     parser.add_argument("--omit-deleted-references", action="store_true",
                         help="Omite as duas referências removidas dos provedores; recorte 51 fontes sem novos uploads")
+    parser.add_argument("--claude-50-only", action="store_true",
+                        help="Executa somente Claude com 50 fontes sem referências e sem Master")
     parser.add_argument("--master-txt", help="Arquivo TXT local validado; usado em prepare --with-master")
     parser.add_argument("--search-token-reserve", type=int,
                         help="Usado apenas no preflight opcional com Master")
     args = parser.parse_args(argv)
     folder = Path(args.folder).resolve()
     original_entries = selection(folder)
-    entries = active_selection(original_entries, args.omit_deleted_references)
+    if args.claude_50_only and (args.command not in ("claude", "compare") or
+                               args.with_master or args.omit_deleted_references):
+        parser.error("--claude-50-only exige comando claude/compare, sem --with-master e sem outros recortes")
+    entries = active_selection(original_entries, args.omit_deleted_references,
+                               args.claude_50_only)
     if args.command == "prepare":
         if args.omit_deleted_references:
             parser.error("Não use prepare neste recorte; os 51 IDs já existem nos dois provedores")
@@ -471,7 +491,8 @@ def main(argv=None):
         return
     if args.command == "compare":
         for provider in ("openai", "claude"):
-            file = result_folder(folder, args.with_master, args.omit_deleted_references) / f"{provider}_response.json"
+            file = result_folder(folder, args.with_master, args.omit_deleted_references,
+                                 args.claude_50_only) / f"{provider}_response.json"
             if file.is_file():
                 r = read_json(file)
                 print(provider, r.get("model"), r.get("status", r.get("stop_reason")), r.get("usage"))
@@ -496,7 +517,7 @@ def main(argv=None):
     for name in (("openai", "claude") if args.command == "both" else (args.command,)):
         run_one(folder, entries, state, text, args.claude_model, args.max_output_tokens,
                 args.budget_usd, name, args.with_master, args.search_token_reserve,
-                args.omit_deleted_references)
+                args.omit_deleted_references, args.claude_50_only)
 
 if __name__ == "__main__":
     try:
