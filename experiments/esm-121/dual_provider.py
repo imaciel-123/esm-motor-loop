@@ -25,6 +25,10 @@ MASTER_SHA256 = "baad0b8603753c1bc722874b38ed4a58cd71e12c41c9a43febb6210aef426e6
 MASTER_BYTES = 1355168
 MASTER_STORE = "vs_6aeb93fb388481919fdc34fdacd4ffba"
 MASTER_OPENAI_FILE = "file-Ahra6jSXMTMw625SegqSpR"
+REMOVED_REFERENCE_PATHS = (
+    "reference/ERENIQ_Governanca_Chats_Codex_v1_3_1.docx",
+    "reference/Loop_Operacional_Engineering_System_v1.3.docx",
+)
 MASTER_GUIDANCE = (
     "O Master 1.5.1 é referencial conceitual, não evidência factual da ESM-121. "
     "Utilize-o para conceitos pertinentes, distinguindo-os dos fatos comprovados nas 53 fontes. "
@@ -86,6 +90,18 @@ def selection(folder):
         paths.add(path)
     return entries
 
+def active_selection(entries, omit_deleted_references=False):
+    """Derivação explícita 51/53; mantém intacto o manifesto 53/45 original."""
+    if not omit_deleted_references:
+        return entries
+    removed = [e for e in entries if e["path"] in REMOVED_REFERENCE_PATHS]
+    if len(removed) != len(REMOVED_REFERENCE_PATHS):
+        raise RuntimeError("As duas referências removidas não constam da seleção original")
+    selected = [e for e in entries if e["path"] not in REMOVED_REFERENCE_PATHS]
+    if len(selected) != 51:
+        raise RuntimeError("Recorte sem duas referências deve conter 51 fontes")
+    return selected
+
 def identity(entries):
     return digest(json.dumps([(e["path"], e["file_id"], e["sha256"]) for e in entries],
                              ensure_ascii=False).encode("utf-8"))
@@ -95,8 +111,10 @@ def experiment_identity(entries, with_master):
         return identity(entries)
     return digest((identity(entries) + MASTER_SHA256 + MASTER_STORE + MASTER_OPENAI_FILE).encode())
 
-def result_folder(folder, with_master):
+def result_folder(folder, with_master, omit_deleted_references=False):
     root = folder / "comparacao_h0_teste3"
+    if omit_deleted_references:
+        return root / ("com_master_51_fontes" if with_master else "51_fontes")
     return root / "com_master" if with_master else root
 
 def prompt(folder, question):
@@ -283,10 +301,14 @@ def prepared(folder, entries, with_master=False):
         validate_master(master_cache(folder).read_bytes())
     return state
 
+def instructions_for(entries, with_master):
+    guidance = MASTER_GUIDANCE.replace("53 fontes", f"{len(entries)} fontes") if with_master else ""
+    return SYSTEM + (" " + guidance if with_master else "")
+
 def requests(entries, state, text, model, output_tokens, with_master=False):
     input_openai = ([{"type": "input_file", "file_id": e["file_id"]} for e in entries] +
                     [{"type": "input_text", "text": text}])
-    instructions = SYSTEM + (" " + MASTER_GUIDANCE if with_master else "")
+    instructions = instructions_for(entries, with_master)
     openai = {"model": MODEL_OPENAI, "reasoning": {"effort": "medium"},
               "instructions": instructions, "max_output_tokens": output_tokens,
               "input": [{"role": "user", "content": input_openai}]}
@@ -317,12 +339,12 @@ def claude_count_payload(folder, entries, text, model, with_master):
         parts.append({"type": "text", "text": "[Fonte: " + MASTER_NAME + "]\n" +
                       master_cache(folder).read_text(encoding="utf-8")})
     parts.append({"type": "text", "text": text})
-    instructions = SYSTEM + (" " + MASTER_GUIDANCE if with_master else "")
+    instructions = instructions_for(entries, with_master)
     return {"model": model, "system": instructions, "output_config": {"effort": "medium"},
             "messages": [{"role": "user", "content": parts}]}
 
 def preflight(folder, entries, state, text, model, output_tokens, budget,
-              with_master=False, search_token_reserve=None):
+              with_master=False, search_token_reserve=None, omit_deleted_references=False):
     if with_master:
         if search_token_reserve is None or search_token_reserve <= 0:
             raise RuntimeError("Informe --search-token-reserve; a recuperação file_search é dinâmica")
@@ -376,14 +398,14 @@ def preflight(folder, entries, state, text, model, output_tokens, budget,
             "Os parsers dos 53 arquivos podem diferir entre provedores."
         ],
         "approved": all(x <= budget for x in costs.values())}
-    save(result_folder(folder, with_master) / "preflight.json", result)
+    save(result_folder(folder, with_master, omit_deleted_references) / "preflight.json", result)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     if not result["approved"]:
         raise RuntimeError("Estimativa acima do orçamento; nenhuma inferência efetuada")
 
 def run_one(folder, entries, state, text, model, output_tokens, budget, provider,
-            with_master=False, search_token_reserve=None):
-    base = result_folder(folder, with_master)
+            with_master=False, search_token_reserve=None, omit_deleted_references=False):
+    base = result_folder(folder, with_master, omit_deleted_references)
     target = base / f"{provider}_response.json"
     pending = base / f"{provider}.pending.json"
     if target.exists() or pending.exists():
@@ -431,19 +453,24 @@ def main(argv=None):
     parser.add_argument("--max-output-tokens", type=int, help="Obrigatório para preflight e inferência; decisão do operador")
     parser.add_argument("--budget-usd", type=float, help="Opcional em inferência direta; obrigatório somente no preflight opcional")
     parser.add_argument("--execute", action="store_true", help="Autoriza UMA inferência paga por provedor")
-    parser.add_argument("--with-master", action="store_true", help="Teste 3B: 53 fontes + Master conceitual")
+    parser.add_argument("--with-master", action="store_true", help="Usa Master conceitual na investigação")
+    parser.add_argument("--omit-deleted-references", action="store_true",
+                        help="Omite as duas referências removidas dos provedores; recorte 51 fontes sem novos uploads")
     parser.add_argument("--master-txt", help="Arquivo TXT local validado; usado em prepare --with-master")
     parser.add_argument("--search-token-reserve", type=int,
                         help="Usado apenas no preflight opcional com Master")
     args = parser.parse_args(argv)
     folder = Path(args.folder).resolve()
-    entries = selection(folder)
+    original_entries = selection(folder)
+    entries = active_selection(original_entries, args.omit_deleted_references)
     if args.command == "prepare":
+        if args.omit_deleted_references:
+            parser.error("Não use prepare neste recorte; os 51 IDs já existem nos dois provedores")
         prepare(folder, entries, with_master=args.with_master, master_txt=args.master_txt)
         return
     if args.command == "compare":
         for provider in ("openai", "claude"):
-            file = result_folder(folder, args.with_master) / f"{provider}_response.json"
+            file = result_folder(folder, args.with_master, args.omit_deleted_references) / f"{provider}_response.json"
             if file.is_file():
                 r = read_json(file)
                 print(provider, r.get("model"), r.get("status", r.get("stop_reason")), r.get("usage"))
@@ -456,17 +483,19 @@ def main(argv=None):
         parser.error("Preflight opcional exige --budget-usd positivo")
     if args.command == "preflight" and args.with_master and (args.search_token_reserve is None or args.search_token_reserve <= 0):
         parser.error("Preflight opcional com Master exige --search-token-reserve positivo")
-    state = prepared(folder, entries, with_master=args.with_master)
+    state = prepared(folder, original_entries, with_master=args.with_master)
     text = prompt(folder, Path(args.questions).resolve())
     if args.command == "preflight":
         preflight(folder, entries, state, text, args.claude_model, args.max_output_tokens,
-                  args.budget_usd, args.with_master, args.search_token_reserve)
+                  args.budget_usd, args.with_master, args.search_token_reserve,
+                  args.omit_deleted_references)
         return
     if not args.execute:
         parser.error("Chamada paga exige --execute")
     for name in (("openai", "claude") if args.command == "both" else (args.command,)):
         run_one(folder, entries, state, text, args.claude_model, args.max_output_tokens,
-                args.budget_usd, name, args.with_master, args.search_token_reserve)
+                args.budget_usd, name, args.with_master, args.search_token_reserve,
+                args.omit_deleted_references)
 
 if __name__ == "__main__":
     try:
