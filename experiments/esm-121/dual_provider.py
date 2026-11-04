@@ -282,25 +282,62 @@ def claude_count_payload(folder, entries, text, model, with_master):
     return {"model": model, "system": instructions, "output_config": {"effort": "medium"},
             "messages": [{"role": "user", "content": parts}]}
 
-def preflight(folder, entries, state, text, model, output_tokens, budget):
-    oai, claude = requests(entries, state, text, model, output_tokens)
+def preflight(folder, entries, state, text, model, output_tokens, budget,
+              with_master=False, search_token_reserve=None):
+    if with_master:
+        if search_token_reserve is None or search_token_reserve <= 0:
+            raise RuntimeError("Informe --search-token-reserve; a recuperação file_search é dinâmica")
+        verify_openai_master()
+    oai, claude = requests(entries, state, text, model, output_tokens, with_master)
     count_oai = api(OPENAI + "/responses/input_tokens", "POST",
                     {**auth("openai"), "Content-Type": "application/json"},
                     {k: v for k, v in oai.items() if k != "max_output_tokens"})["input_tokens"]
-    # Count the exact file_id-backed input that will be submitted to Messages.
+    # A API Anthropic não aceita source=file em count_tokens. Usa os mesmos bytes TXT inline.
+    surrogate = claude_count_payload(folder, entries, text, model, with_master)
     count_claude = api(ANTHROPIC + "/messages/count_tokens", "POST",
                        {**auth("claude"), "Content-Type": "application/json"},
-                       {k: v for k, v in claude.items() if k != "max_tokens"})["input_tokens"]
-    rates = {"openai": OPENAI_RATE, "claude": CLAUDE_RATES[model]}
+                       surrogate)["input_tokens"]
     counts = {"openai": int(count_oai), "claude": int(count_claude)}
-    costs = {p: round((n * 1.2 * rates[p][0] + output_tokens * rates[p][1]) / 1e6, 4)
-             for p, n in counts.items()}
-    result = {"corpus_id": identity(entries), "prompt_sha256": digest(text.encode()),
-              "model_claude": model, "output_tokens": output_tokens, "budget_usd": budget,
-              "input_tokens": counts, "cost_estimate_usd": costs,
-              "approved": all(x <= budget for x in costs.values())}
-    save(folder / "comparacao_h0_teste3" / "preflight.json", result)
-    print(json.dumps(result, indent=2))
+    projected_oai = counts["openai"] * 1.2 + (search_token_reserve or 0)
+    projected_claude = counts["claude"] * 1.2
+    if (output_tokens > 128000 or projected_oai + output_tokens > 1050000 or
+            projected_claude + output_tokens > 1000000):
+        raise RuntimeError("Contexto/saída estimados excedem capacidade dos modelos; nenhuma inferência")
+    # GPT-6.1 Sol cobra multiplicador long-context para >272K tokens de entrada.
+    long_context = projected_oai > 272000
+    costs = {
+        "openai": round(
+            (projected_oai * OPENAI_RATE[0] * (2 if long_context else 1)
+             + output_tokens * OPENAI_RATE[1] * (1.5 if long_context else 1)) / 1e6
+            + (0.0025 if with_master else 0), 4),
+        "claude": round(
+            (projected_claude * CLAUDE_RATES[model][0]
+             + output_tokens * CLAUDE_RATES[model][1]) / 1e6, 4)}
+    result = {
+        "experiment_id": experiment_identity(entries, with_master),
+        "mode": "53+master" if with_master else "53-only",
+        "corpus_id": identity(entries), "prompt_sha256": digest(text.encode()),
+        "model_claude": model, "output_tokens": output_tokens, "budget_usd": budget,
+        "search_token_reserve": search_token_reserve if with_master else None,
+        "master": ({"sha256": MASTER_SHA256, "vector_store_id": MASTER_STORE,
+                    "openai_file_id": MASTER_OPENAI_FILE,
+                    "claude_file_id": state["master"]["file_id"],
+                    "openai_access": "file_search", "claude_access": "file_document"}
+                   if with_master else None),
+        "request_sha256": {
+            "openai": digest(json.dumps(oai, sort_keys=True).encode()),
+            "claude": digest(json.dumps(claude, sort_keys=True).encode())},
+        "input_tokens": counts, "cost_estimate_usd": costs,
+        "limitations": [
+            "OpenAI: file_search consulta trechos, não o Master integral; buscas e tokens reais variam.",
+            "Claude: contagem estimada sobre TXT inline; não mede exatamente overhead dos document blocks.",
+            "Custos são estimativas, não teto de cobrança: incluem 20% de margem de entrada.",
+            "OpenAI: inclui reserva de tokens do operador e estimativa de uma busca ($0.0025); buscas adicionais custam.",
+            "Os parsers dos 53 arquivos podem diferir entre provedores."
+        ],
+        "approved": all(x <= budget for x in costs.values())}
+    save(result_folder(folder, with_master) / "preflight.json", result)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
     if not result["approved"]:
         raise RuntimeError("Estimativa acima do orçamento; nenhuma inferência efetuada")
 
