@@ -384,22 +384,12 @@ def preflight(folder, entries, state, text, model, output_tokens, budget,
 def run_one(folder, entries, state, text, model, output_tokens, budget, provider,
             with_master=False, search_token_reserve=None):
     base = result_folder(folder, with_master)
-    check = read_json(base / "preflight.json")
-    if (not check.get("approved") or
-        check.get("experiment_id") != experiment_identity(entries, with_master) or
-        check["prompt_sha256"] != digest(text.encode()) or check["model_claude"] != model or
-        check["output_tokens"] != output_tokens or check["budget_usd"] != budget or
-        check.get("search_token_reserve") != (search_token_reserve if with_master else None) or
-        (with_master and check.get("master", {}).get("claude_file_id") != state["master"]["file_id"])):
-        raise RuntimeError("Preflight ausente ou inconsistente; nenhuma inferência")
     target = base / f"{provider}_response.json"
     pending = base / f"{provider}.pending.json"
     if target.exists() or pending.exists():
         raise RuntimeError("Chamada já realizada ou indeterminada; não repetir")
     oai, claude = requests(entries, state, text, model, output_tokens, with_master)
     body = oai if provider == "openai" else claude
-    if digest(json.dumps(body, sort_keys=True).encode()) != check["request_sha256"][provider]:
-        raise RuntimeError("Payload diferente do preflight; nenhuma inferência")
     save(pending, {"provider": provider, "corpus_id": identity(entries),
                    "request_sha256": digest(json.dumps(body, sort_keys=True).encode()),
                    "warning": "Não repetir após timeout: a chamada pode ter sido cobrada"})
@@ -439,12 +429,12 @@ def main(argv=None):
     parser.add_argument("--questions", default=str(Path(__file__).with_name("perguntas_teste3.md")))
     parser.add_argument("--claude-model", choices=CLAUDE_RATES, default="claude-sonnet-5-5")
     parser.add_argument("--max-output-tokens", type=int, help="Obrigatório para preflight e inferência; decisão do operador")
-    parser.add_argument("--budget-usd", type=float, help="Obrigatório para preflight e inferência; por provedor")
+    parser.add_argument("--budget-usd", type=float, help="Opcional em inferência direta; obrigatório somente no preflight opcional")
     parser.add_argument("--execute", action="store_true", help="Autoriza UMA inferência paga por provedor")
     parser.add_argument("--with-master", action="store_true", help="Teste 3B: 53 fontes + Master conceitual")
     parser.add_argument("--master-txt", help="Arquivo TXT local validado; usado em prepare --with-master")
     parser.add_argument("--search-token-reserve", type=int,
-                        help="Reserva escolhida pelo operador para recuperação file_search no modo Master")
+                        help="Usado apenas no preflight opcional com Master")
     args = parser.parse_args(argv)
     folder = Path(args.folder).resolve()
     entries = selection(folder)
@@ -460,10 +450,12 @@ def main(argv=None):
             else:
                 print(provider, "sem resposta")
         return
-    if args.max_output_tokens is None or args.max_output_tokens <= 0 or args.budget_usd is None or args.budget_usd <= 0:
-        parser.error("Informe --max-output-tokens e --budget-usd explicitamente; não há teto decidido pelo programa")
-    if args.with_master and (args.search_token_reserve is None or args.search_token_reserve <= 0):
-        parser.error("Informe --search-token-reserve explicitamente no modo Master")
+    if args.max_output_tokens is None or args.max_output_tokens <= 0:
+        parser.error("Informe --max-output-tokens explicitamente para limitar a saída")
+    if args.command == "preflight" and (args.budget_usd is None or args.budget_usd <= 0):
+        parser.error("Preflight opcional exige --budget-usd positivo")
+    if args.command == "preflight" and args.with_master and (args.search_token_reserve is None or args.search_token_reserve <= 0):
+        parser.error("Preflight opcional com Master exige --search-token-reserve positivo")
     state = prepared(folder, entries, with_master=args.with_master)
     text = prompt(folder, Path(args.questions).resolve())
     if args.command == "preflight":

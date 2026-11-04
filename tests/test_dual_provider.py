@@ -57,10 +57,30 @@ class DualProviderTests(unittest.TestCase):
         self.assertEqual(len(state["files"]), len(again["files"]))
         self.assertEqual(len(m.prepared(self.folder, self.entries)["files"]), 53)
 
-    def test_no_inference_without_explicit_limit_and_budget(self):
+    def test_preflight_optionally_requires_budget_but_inference_requires_only_limit(self):
         with self.assertRaises(SystemExit):
             m.main(["preflight", "--folder", str(self.folder)])
+        with self.assertRaises(SystemExit):
+            m.main(["openai", "--folder", str(self.folder), "--execute"])
         self.assertFalse((self.folder / "comparacao_h0_teste3/openai_response.json").exists())
+
+    def test_direct_paid_inference_does_not_call_preflight_or_upload(self):
+        state = self.ready()
+        calls = []
+        def fake_api(url, method, headers, body=None, raw=False, timeout=600):
+            calls.append(url)
+            if url.endswith("/responses"):
+                return {"id": "resp-direct", "status": "completed", "model": m.MODEL_OPENAI,
+                        "output": [{"content": [{"type": "output_text", "text": "Resultado direto"}]}]}
+            raise AssertionError("Chamada extra proibida: " + url)
+        self.assertFalse((self.folder / "comparacao_h0_teste3/preflight.json").exists())
+        with patch.object(m, "api", side_effect=fake_api), patch.object(m, "auth", return_value={}), \
+             patch.object(m, "upload_claude") as upload, patch("builtins.print"):
+            m.run_one(self.folder, self.entries, state, self.text, self.model,
+                      self.output, None, "openai")
+            upload.assert_not_called()
+        self.assertEqual(calls, [m.OPENAI + "/responses"])
+        self.assertTrue((self.folder / "comparacao_h0_teste3/openai_response.json").exists())
 
     def test_preflight_counts_both_and_single_paid_call_each(self):
         state = self.ready()
