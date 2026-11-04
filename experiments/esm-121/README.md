@@ -50,7 +50,7 @@ python experiments/esm-121/dual_provider.py prepare --with-master
 
 O script encontra o TXT validado automaticamente no cache ou em `Downloads`; `--master-txt` continua opcional. Este comando verifica SHA-256 antes de enviar o Master. Os IDs Claude ficam em `data/results/.../comparacao_h0_teste3/claude_files.json`; o Master local validado é copiado para `master_integral.txt` dentro dessa mesma área ignorada pelo Git. Nenhum upload é feito à OpenAI.
 
-**Preflight 3B, sem inferência paga:** defina *você* três valores: `--max-output-tokens` (teto técnico de saída), `--budget-usd` (orçamento estimado por provedor) e `--search-token-reserve` (reserva estimada para material recuperado no OpenAI file_search, que não é previsível antes da execução). Não existem escolhas obrigatórias de tamanho de resposta nem limites fixos arbitrários; modelos e custos devem ser avaliados com o corpus real.
+**Preflight 3B OPCIONAL, sem inferência paga:** defina *você* três valores: `--max-output-tokens` (teto técnico de saída), `--budget-usd` (orçamento estimado por provedor) e `--search-token-reserve` (reserva estimada para material recuperado no OpenAI file_search, que não é previsível antes da execução). Não existem escolhas obrigatórias de tamanho de resposta nem limites fixos arbitrários; modelos e custos devem ser avaliados com o corpus real.
 
 ```powershell
 python experiments/esm-121/dual_provider.py preflight --with-master --max-output-tokens N --budget-usd B --search-token-reserve R
@@ -64,11 +64,13 @@ Substitua `N`, `B` e `R` por números deliberadamente escolhidos; a linha acima 
 4. Estima custos considerando margem de 20% de entrada, reserva declarada pelo operador e o adicional de contexto longo do modelo OpenAI quando aplicável. Inclui valor indicativo de **uma** busca; mais buscas custam. Estimativa **não** é teto de cobrança.
 5. Registra o fingerprint dos payloads, versão do experimento e limitações separadas por provedor.
 
-Só depois da conferência e autorização explícita será possível executar (a inferência pode ser cobrada):
+**Execução direta, SEM preflight obrigatório e SEM upload** (a inferência pode ser cobrada):
 
 ```powershell
-python experiments/esm-121/dual_provider.py both --with-master --max-output-tokens N --budget-usd B --search-token-reserve R --execute
+python experiments/esm-121/dual_provider.py both --with-master --max-output-tokens 12000 --execute
 ```
+
+O preflight é uma ferramenta opcional e não bloqueia a inferência. `--execute` continua obrigatório; o executor usa os IDs existentes e grava um marcador `.pending.json` ANTES de cada chamada paga para impedir repetição acidental. `--max-output-tokens` limita a saída, não a cobrança total. **A existência e a recuperação real do Master na Vector Store OpenAI não estão confirmadas pelo preflight que falhou**: a chamada paga poderá falhar ou produzir resultado sem recuperação do Master. Nesse caso a resposta fica arquivada e não deve ser repetida automaticamente.
 
 O programa não repete automaticamente chamadas incertas ou já realizadas. No modo 3B, se a resposta OpenAI não registrar um resultado recuperado do **arquivo do Master**, preserva o resultado e a marca de chamada, mas **não declara conclusão bem-sucedida**. Não tente repetir sem investigar o ocorrido.
 
