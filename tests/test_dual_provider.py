@@ -72,6 +72,10 @@ class DualProviderTests(unittest.TestCase):
         self.assertNotEqual(m.result_folder(self.folder, True, True),
                             m.result_folder(self.folder, True, False))
 
+    def test_master_openai_id_matches_current_storage(self):
+        # Identificador confirmado pelo operador na Vector Store 'master' em 04/11/2026.
+        self.assertEqual(m.MASTER_OPENAI_FILE, "file-2J9CuGsQXaiuGG9Mn35ebu")
+
     def test_selection_validates_53_existing_ids(self):
         self.assertEqual(len(m.selection(self.folder)), 53)
         self.assertEqual(len({e["file_id"] for e in m.selection(self.folder)}), 53)
