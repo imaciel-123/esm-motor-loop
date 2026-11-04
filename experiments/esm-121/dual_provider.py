@@ -341,19 +341,25 @@ def preflight(folder, entries, state, text, model, output_tokens, budget,
     if not result["approved"]:
         raise RuntimeError("Estimativa acima do orçamento; nenhuma inferência efetuada")
 
-def run_one(folder, entries, state, text, model, output_tokens, budget, provider):
-    base = folder / "comparacao_h0_teste3"
+def run_one(folder, entries, state, text, model, output_tokens, budget, provider,
+            with_master=False, search_token_reserve=None):
+    base = result_folder(folder, with_master)
     check = read_json(base / "preflight.json")
-    if (not check.get("approved") or check["corpus_id"] != identity(entries) or
+    if (not check.get("approved") or
+        check.get("experiment_id") != experiment_identity(entries, with_master) or
         check["prompt_sha256"] != digest(text.encode()) or check["model_claude"] != model or
-        check["output_tokens"] != output_tokens or check["budget_usd"] != budget):
+        check["output_tokens"] != output_tokens or check["budget_usd"] != budget or
+        check.get("search_token_reserve") != (search_token_reserve if with_master else None) or
+        (with_master and check.get("master", {}).get("claude_file_id") != state["master"]["file_id"])):
         raise RuntimeError("Preflight ausente ou inconsistente; nenhuma inferência")
     target = base / f"{provider}_response.json"
     pending = base / f"{provider}.pending.json"
     if target.exists() or pending.exists():
         raise RuntimeError("Chamada já realizada ou indeterminada; não repetir")
-    oai, claude = requests(entries, state, text, model, output_tokens)
+    oai, claude = requests(entries, state, text, model, output_tokens, with_master)
     body = oai if provider == "openai" else claude
+    if digest(json.dumps(body, sort_keys=True).encode()) != check["request_sha256"][provider]:
+        raise RuntimeError("Payload diferente do preflight; nenhuma inferência")
     save(pending, {"provider": provider, "corpus_id": identity(entries),
                    "request_sha256": digest(json.dumps(body, sort_keys=True).encode()),
                    "warning": "Não repetir após timeout: a chamada pode ter sido cobrada"})
@@ -364,6 +370,17 @@ def run_one(folder, entries, state, text, model, output_tokens, budget, provider
         complete = response.get("status") == "completed"
         chunks = [c.get("text", "") for out in response.get("output", []) for c in out.get("content", [])
                   if c.get("type") == "output_text"]
+        if with_master:
+            search_calls = [o for o in response.get("output", [])
+                            if o.get("type") == "file_search_call"]
+            hits = [hit for call in search_calls for hit in (call.get("results") or [])
+                    if hit.get("file_id") == MASTER_OPENAI_FILE]
+            save(base / "openai_master_retrieval.json", {
+                "vector_store_id": MASTER_STORE, "master_file_id": MASTER_OPENAI_FILE,
+                "search_calls": len(search_calls), "master_hits": len(hits),
+                "master_retrieved": bool(hits)})
+            if not hits:
+                raise RuntimeError("Resposta arquivada, mas sem resultado recuperado do Master. Não repetir automaticamente.")
     else:
         complete = response.get("stop_reason") == "end_turn"
         chunks = [c.get("text", "") for c in response.get("content", []) if c.get("type") == "text"]
@@ -384,15 +401,19 @@ def main(argv=None):
     parser.add_argument("--max-output-tokens", type=int, help="Obrigatório para preflight e inferência; decisão do operador")
     parser.add_argument("--budget-usd", type=float, help="Obrigatório para preflight e inferência; por provedor")
     parser.add_argument("--execute", action="store_true", help="Autoriza UMA inferência paga por provedor")
+    parser.add_argument("--with-master", action="store_true", help="Teste 3B: 53 fontes + Master conceitual")
+    parser.add_argument("--master-txt", help="Arquivo TXT local validado; usado em prepare --with-master")
+    parser.add_argument("--search-token-reserve", type=int,
+                        help="Reserva escolhida pelo operador para recuperação file_search no modo Master")
     args = parser.parse_args(argv)
     folder = Path(args.folder).resolve()
     entries = selection(folder)
     if args.command == "prepare":
-        prepare(folder, entries)
+        prepare(folder, entries, with_master=args.with_master, master_txt=args.master_txt)
         return
     if args.command == "compare":
         for provider in ("openai", "claude"):
-            file = folder / "comparacao_h0_teste3" / f"{provider}_response.json"
+            file = result_folder(folder, args.with_master) / f"{provider}_response.json"
             if file.is_file():
                 r = read_json(file)
                 print(provider, r.get("model"), r.get("status", r.get("stop_reason")), r.get("usage"))
@@ -401,15 +422,19 @@ def main(argv=None):
         return
     if args.max_output_tokens is None or args.max_output_tokens <= 0 or args.budget_usd is None or args.budget_usd <= 0:
         parser.error("Informe --max-output-tokens e --budget-usd explicitamente; não há teto decidido pelo programa")
-    state = prepared(folder, entries)
+    if args.with_master and (args.search_token_reserve is None or args.search_token_reserve <= 0):
+        parser.error("Informe --search-token-reserve explicitamente no modo Master")
+    state = prepared(folder, entries, with_master=args.with_master)
     text = prompt(folder, Path(args.questions).resolve())
     if args.command == "preflight":
-        preflight(folder, entries, state, text, args.claude_model, args.max_output_tokens, args.budget_usd)
+        preflight(folder, entries, state, text, args.claude_model, args.max_output_tokens,
+                  args.budget_usd, args.with_master, args.search_token_reserve)
         return
     if not args.execute:
         parser.error("Chamada paga exige --execute")
     for name in (("openai", "claude") if args.command == "both" else (args.command,)):
-        run_one(folder, entries, state, text, args.claude_model, args.max_output_tokens, args.budget_usd, name)
+        run_one(folder, entries, state, text, args.claude_model, args.max_output_tokens,
+                args.budget_usd, name, args.with_master, args.search_token_reserve)
 
 if __name__ == "__main__":
     try:
