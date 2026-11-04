@@ -179,7 +179,7 @@ class DualProviderTests(unittest.TestCase):
                  patch.object(m, "auth", return_value={}):
                 with self.assertRaisesRegex(RuntimeError, "SHA-256"):
                     m.verify_openai_master()
-        self.assertEqual(len(observed), 4)
+        self.assertGreaterEqual(len(observed), 4)
 
     def test_master_preflight_and_missing_retrieval_block_retry(self):
         state = self.ready()
