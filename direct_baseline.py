@@ -68,7 +68,7 @@ def scan(folder: Path, question_path: Path) -> dict:
     if not files:
         raise ValueError("A pasta de entrada está vazia.")
     registered = []
-    names, digests = set(), set()
+    names, digests = set(), {}
     total = 0
     for path in files:
         if path.is_symlink():
@@ -90,12 +90,15 @@ def scan(folder: Path, question_path: Path) -> dict:
         if size >= MAX_BYTES or total >= MAX_BYTES:
             raise ValueError("Arquivos juntos devem ter MENOS de 50 MB. Nada enviado.")
         digest = sha256(path.read_bytes())
-        if digest in digests:
-            raise ValueError(f"Conteúdo idêntico duplicado: {rel}. Revise sem exclusão automática.")
-        digests.add(digest)
+        # Em snapshots históricos, o mesmo conteúdo pode ocorrer em SHAs/PRs
+        # diferentes. Preservar cada fonte e seu caminho; registrar a
+        # equivalência byte a byte em vez de excluir ou rejeitar.
+        duplicate_of = digests.get(digest)
+        if duplicate_of is None:
+            digests[digest] = rel
         registered.append({
             "path": rel, "name": path.name, "extension": path.suffix.lower(),
-            "bytes": size, "sha256": digest,
+            "bytes": size, "sha256": digest, "duplicate_of": duplicate_of,
             "processing_note": ("Planilha: a API pode resumir dados e considerar no máximo 1.000 linhas por aba."
                                 if path.suffix.lower() in {".xls", ".xlsx", ".csv", ".tsv"}
                                 else "Documento não-PDF: imagens e gráficos incorporados podem não estar disponíveis."
@@ -105,9 +108,15 @@ def scan(folder: Path, question_path: Path) -> dict:
         })
     if not registered:
         raise ValueError("Nenhum arquivo legível encontrado.")
+    identical_contents = [
+        {"file": item["path"], "identical_to": item["duplicate_of"], "sha256": item["sha256"]}
+        for item in registered if item["duplicate_of"] is not None
+    ]
     return {
         "model": MODEL, "question_file": str(question_path), "question_sha256": sha256(question.encode("utf-8")),
         "question": question, "file_count": len(registered), "total_bytes": total,
+        "duplicate_content_count": len(identical_contents),
+        "duplicate_contents": identical_contents,
         "files": registered,
         "cost_notice": "Custo real desconhecido antes da chamada: upload de bytes NÃO determina tokens processados; planilhas e PDFs usam parsing próprio.",
         "price_scenarios_usd": {
@@ -124,7 +133,7 @@ def payload(file_ids: list[str], question: str, model: str = MODEL) -> dict:
         "model": model, "store": False,
         "instructions": INSTRUCTIONS,
         "reasoning": {"effort": "medium"},
-        "max_output_tokens": 12000,
+        # Saida sem teto arbitrario: a API decide conforme limite do modelo.
         "input": [{"role": "user", "content": (
             [{"type": "input_file", "file_id": file_id} for file_id in file_ids]
             + [{"type": "input_text", "text": question}]
@@ -266,6 +275,11 @@ def print_preview(info: dict) -> None:
     print(f"Modelo: {info['model']}")
     print(f"Pergunta literal: {info['question'].strip()}")
     print(f"Arquivos: {info['file_count']}; bytes: {info['total_bytes']:,} (limite < 50 MB)")
+    if info["duplicate_content_count"]:
+        print(f"AVISO: {info['duplicate_content_count']} arquivos com bytes idênticos, "
+              "mantidos integralmente como fontes históricas distintas:")
+        for duplicate in info["duplicate_contents"]:
+            print(f"  = {duplicate['file']} [idêntico a {duplicate['identical_to']}]")
     for item in info["files"]:
         print(f"  - {item['path']} ({item['bytes']:,} bytes; {item['sha256'][:12]})")
         if item["extension"] in {".xlsx", ".xls", ".csv", ".tsv", ".pdf", ".doc", ".docx"}:
@@ -368,6 +382,11 @@ def main() -> int:
             print_preview(info)
             return 0
         print(f"Arquivos prontos: {info['file_count']} originais. Modelo: {MODEL}.", flush=True)
+        if info["duplicate_content_count"]:
+            print(f"AVISO: {info['duplicate_content_count']} arquivos têm conteúdo idêntico; "
+                  "TODOS serão preservados e enviados como fontes distintas.", flush=True)
+            for duplicate in info["duplicate_contents"]:
+                print(f"  {duplicate['file']} == {duplicate['identical_to']}", flush=True)
         if not os.getenv("OPENAI_API_KEY"):
             raise ValueError("OPENAI_API_KEY não está configurada; nenhum upload realizado.")
         confirm = input("Autoriza upload de todos os arquivos + UMA chamada paga? Digite ENVIAR: ")

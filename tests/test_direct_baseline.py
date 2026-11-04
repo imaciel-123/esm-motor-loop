@@ -120,9 +120,34 @@ class DirectBaselineTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Formato não previsto"):
             b.scan(self.src, self.question)
 
-    def test_duplicate_blocks_without_calls(self):
-        (self.src / "copy.md").write_text("Uma fonte.\n", encoding="utf-8")
-        with self.assertRaisesRegex(ValueError, "Conteúdo idêntico"):
+    def test_identical_historical_snapshots_are_preserved_with_provenance(self):
+        # Mesmo conteúdo em dois commits não implica mesma origem histórica.
+        (self.src / "PR-221__run-tests.mjs.txt").write_text("script estável\n", encoding="utf-8")
+        (self.src / "PR-229__run-tests.mjs.txt").write_text("script estável\n", encoding="utf-8")
+        preview = b.scan(self.src, self.question)
+        self.assertEqual(preview["file_count"], 4)
+        self.assertEqual(preview["duplicate_content_count"], 1)
+        duplicate = preview["duplicate_contents"][0]
+        self.assertEqual(duplicate["file"], "PR-229__run-tests.mjs.txt")
+        self.assertEqual(duplicate["identical_to"], "PR-221__run-tests.mjs.txt")
+        fake = FakeClient()
+        result = b.run(preview, self.src, self.out, fake)
+        self.assertEqual(len(fake.files.created), 4)
+        self.assertEqual(len(fake.responses.count_calls), 1)
+        self.assertEqual(len(fake.responses.calls), 1)
+        parts = fake.responses.calls[0]["input"][0]["content"]
+        self.assertEqual(sum(p["type"] == "input_file" for p in parts), 4)
+        uploaded = json.loads((result / "manifest.json").read_text())["uploads"]
+        matches = [x for x in uploaded if "run-tests.mjs.txt" in x["name"]]
+        self.assertEqual(len(matches), 2)
+        self.assertEqual(matches[0]["sha256"], matches[1]["sha256"])
+        self.assertNotEqual(matches[0]["path"], matches[1]["path"])
+        self.assertEqual(len({x["file_id"] for x in matches}), 2)
+
+    def test_duplicate_basename_still_blocks(self):
+        (self.src / "subfolder").mkdir()
+        (self.src / "subfolder" / "a.md").write_text("Outro texto", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "Nome de arquivo duplicado"):
             b.scan(self.src, self.question)
 
     def test_size_limit(self):
