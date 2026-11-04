@@ -118,7 +118,7 @@ class DualProviderTests(unittest.TestCase):
     def test_bad_hash_blocks_before_external_upload(self):
         self.entries[0]["sha256"] = "0" * 64
         with patch.object(m, "upload_claude") as upload:
-            with self.assertRaisesRegex(RuntimeError, "SHA256"):
+            with self.assertRaisesRegex(RuntimeError, "Fonte original indisponível"):
                 m.prepare(self.folder, self.entries)
             upload.assert_not_called()
 
@@ -157,8 +157,7 @@ class DualProviderTests(unittest.TestCase):
                 m.prepare(self.folder, self.entries, with_master=True, master_txt=source)
             uploaded.assert_not_called()
 
-    def test_openai_master_verification_checks_bytes_and_index(self):
-        sample = b"Master test content"
+    def test_openai_master_verification_checks_metadata_without_content_download(self):
         observed = []
         def fake_api(url, method, headers, body=None, raw=False, timeout=600):
             observed.append(url)
@@ -167,19 +166,50 @@ class DualProviderTests(unittest.TestCase):
             if url.endswith("/files?limit=100"):
                 return {"data": [{"id": m.MASTER_OPENAI_FILE, "status": "completed"}]}
             if url.endswith("/files/" + m.MASTER_OPENAI_FILE):
-                return {"filename": m.MASTER_NAME}
-            if url.endswith("/files/" + m.MASTER_OPENAI_FILE + "/content"):
-                return sample
-            raise AssertionError(url)
-        with patch.object(m, "MASTER_SHA256", m.digest(sample)):
-            with patch.object(m, "api", side_effect=fake_api), patch.object(m, "auth", return_value={}):
+                return {"filename": m.MASTER_NAME, "bytes": m.MASTER_BYTES}
+            raise AssertionError("Download proibido ou URL inesperada: " + url)
+        with patch.object(m, "api", side_effect=fake_api), patch.object(m, "auth", return_value={}):
+            m.verify_openai_master()
+        self.assertEqual(len(observed), 3)
+        self.assertTrue(all(not url.endswith("/content") for url in observed))
+        def bad_metadata(url, *args, **kwargs):
+            result = fake_api(url, *args, **kwargs)
+            if url.endswith("/files/" + m.MASTER_OPENAI_FILE):
+                return {**result, "bytes": -1}
+            return result
+        with patch.object(m, "api", side_effect=bad_metadata), patch.object(m, "auth", return_value={}):
+            with self.assertRaisesRegex(RuntimeError, "Metadados"):
                 m.verify_openai_master()
-            with patch.object(m, "api", side_effect=lambda *a, **kw: b"tampered"
-                              if a[0].endswith("/content") else fake_api(*a, **kw)), \
-                 patch.object(m, "auth", return_value={}):
-                with self.assertRaisesRegex(RuntimeError, "SHA-256"):
-                    m.verify_openai_master()
-        self.assertGreaterEqual(len(observed), 4)
+
+    def test_original_sources_are_found_locally_without_openai_download(self):
+        rec = self.entries[0]
+        local_data = self.folder / "data" / "input" / rec["path"]
+        local_data.parent.mkdir(parents=True, exist_ok=True)
+        local_data.write_bytes(f"corpus-0".encode())
+        direct = self.folder / rec["path"]
+        direct.unlink()
+        fake_file = str(self.folder / "experiments" / "esm-121" / "dual_provider.py")
+        with patch.object(m, "__file__", fake_file), patch.object(m, "api") as api:
+            text, cache = m.source_bytes(self.folder, rec)
+            self.assertEqual(text, b"corpus-0")
+            self.assertTrue(cache.is_file())
+            api.assert_not_called()
+
+    def test_missing_local_source_stops_without_api_download(self):
+        rec = self.entries[0]
+        (self.folder / rec["path"]).unlink()
+        fake_file = str(self.folder / "experiments" / "esm-121" / "dual_provider.py")
+        with patch.object(m, "__file__", fake_file), patch.object(m, "api") as api:
+            with self.assertRaisesRegex(RuntimeError, "user_data"):
+                m.source_bytes(self.folder, rec)
+            api.assert_not_called()
+
+    def test_prepare_checks_all_sources_before_uploading_to_claude(self):
+        self.entries[-1]["sha256"] = "0" * 64
+        with patch.object(m, "upload_claude") as upload:
+            with self.assertRaisesRegex(RuntimeError, "Fonte original indisponível"):
+                m.prepare(self.folder, self.entries)
+            upload.assert_not_called()
 
     def test_claude_master_metadata_must_match_prepared_bytes(self):
         state = self.ready()

@@ -22,6 +22,7 @@ CLAUDE_RATES = {"claude-sonnet-5-5": (2.0, 10.0), "claude-opus-5-5": (4.0, 20.0)
 OPENAI_RATE = (2.0, 10.0)
 MASTER_NAME = "O_Sistema_que_Constroi_o_Software_Master_1.5.1_INTEGRAL.txt"
 MASTER_SHA256 = "baad0b8603753c1bc722874b38ed4a58cd71e12c41c9a43febb6210aef426e66"
+MASTER_BYTES = 1355168
 MASTER_STORE = "vs_6aeb93fb388481919fdc34fdacd4ffba"
 MASTER_OPENAI_FILE = "file-Ahra6jSXMTMw625SegqSpR"
 MASTER_GUIDANCE = (
@@ -131,17 +132,36 @@ def to_claude_text(path, original):
     return original
 
 def source_bytes(folder, rec):
+    """Recupera fontes do corpus LOCAL; nunca baixa uploads OpenAI user_data."""
     original_cache = folder / "comparacao_h0_teste3" / "originais" / (digest(rec["path"].encode()) + ".bin")
     text_cache = folder / "comparacao_h0_teste3" / "fontes" / (digest(rec["path"].encode()) + ".txt")
-    local = folder.joinpath(*rec["path"].split("/"))
-    if local.is_file():
-        content = local.read_bytes()
-    elif original_cache.is_file():
-        content = original_cache.read_bytes()
-    else:
-        content = api(f"{OPENAI}/files/{rec['file_id']}/content", "GET", auth("openai"), raw=True)
-    if digest(content).lower() != rec["sha256"].lower():
-        raise RuntimeError("SHA256 divergente: " + rec["path"])
+    repo_data = Path(__file__).resolve().parents[2] / "data"
+    relative = Path(*rec["path"].split("/"))
+    candidates = [folder / relative, original_cache, repo_data / "input" / relative]
+    # O coletor preserva baselines anteriores em data/archive/input-before-esm121-*.
+    if (repo_data / "archive").is_dir():
+        candidates.extend(sorted((repo_data / "archive").glob("input-before-esm121-*"),
+                                 reverse=True))
+        candidates = [c / relative if c.is_dir() and c.parent == repo_data / "archive"
+                      else c for c in candidates]
+    candidates.append(repo_data / "esm121_candidate" / relative)
+    checked = []
+    content = None
+    for local in candidates:
+        if local.is_file():
+            found = local.read_bytes()
+            if digest(found).lower() == rec["sha256"].lower():
+                content = found
+                break
+            checked.append(str(local))
+    if content is None:
+        note = ("Há arquivos com hash diferente em: " + ", ".join(checked)
+                if checked else "Nenhuma cópia local encontrada")
+        raise RuntimeError(
+            f"Fonte original indisponível: {rec['path']}. {note}. "
+            "Verifique data/input (corpus coletado) ou cópias preservadas em data/archive; "
+            "arquivos OpenAI user_data NÃO podem ser baixados por /files/.../content. "
+            "Nenhum upload foi iniciado.")
     transformed = to_claude_text(rec["path"], content)
     original_cache.parent.mkdir(parents=True, exist_ok=True)
     original_cache.write_bytes(content)
@@ -177,8 +197,12 @@ def stage_master(folder, state, master_txt):
         cache.write_bytes(data)
     elif cache.is_file():
         data = validate_master(cache.read_bytes())
+    elif (Path.home() / "Downloads" / MASTER_NAME).is_file():
+        data = validate_master((Path.home() / "Downloads" / MASTER_NAME).read_bytes())
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_bytes(data)
     else:
-        raise RuntimeError("Informe --master-txt com o TXT validado para preparar o Claude")
+        raise RuntimeError("Master TXT não encontrado no cache ou Downloads; informe --master-txt")
     existing = state.get("master")
     if existing:
         if (existing.get("sha256") != MASTER_SHA256 or
@@ -191,7 +215,7 @@ def stage_master(folder, state, master_txt):
     save(folder / "comparacao_h0_teste3" / "claude_files.json", state)
 
 def verify_openai_master():
-    """Confirma indexação e compara o TXT armazenado com o hash canônico."""
+    """Confirma indexação e metadados. A OpenAI não permite baixar user_data para SHA."""
     headers = auth("openai")
     store = api(f"{OPENAI}/vector_stores/{MASTER_STORE}", "GET", headers)
     if store.get("status") != "completed" or store.get("file_counts", {}).get("failed", 0):
@@ -201,10 +225,8 @@ def verify_openai_master():
     if len(matches) != 1 or matches[0].get("status") != "completed":
         raise RuntimeError("Master ausente ou não indexado na Vector Store")
     metadata = api(f"{OPENAI}/files/{MASTER_OPENAI_FILE}", "GET", headers)
-    if metadata.get("filename") != MASTER_NAME:
-        raise RuntimeError("Nome do Master indexado divergente")
-    original = api(f"{OPENAI}/files/{MASTER_OPENAI_FILE}/content", "GET", headers, raw=True)
-    validate_master(original)
+    if metadata.get("filename") != MASTER_NAME or metadata.get("bytes") != MASTER_BYTES:
+        raise RuntimeError("Metadados do Master indexado divergentes; sem prova byte a byte remota")
 
 def verify_claude_master(state, folder):
     """Confere metadados do arquivo previamente enviado à Anthropic; sem inferência."""
@@ -220,8 +242,16 @@ def prepare(folder, entries, with_master=False, master_txt=None):
     state = read_json(path) if path.is_file() else {"corpus_id": identity(entries), "files": {}}
     if state["corpus_id"] != identity(entries):
         raise RuntimeError("Corpus mudou desde o preparo anterior")
-    for index, rec in enumerate(entries, 1):
-        content, cache = source_bytes(folder, rec)
+    # Antes de QUALQUER upload, verifica que as 53 fontes originais existem
+    # e correspondem aos SHA-256. Não busca uploads user_data na OpenAI.
+    sources = [(rec, *source_bytes(folder, rec)) for rec in entries]
+    if with_master:
+        # Valida o Master também antes de qualquer upload Claude.
+        candidate = (Path(master_txt) if master_txt else
+                     master_cache(folder) if master_cache(folder).is_file() else
+                     Path.home() / "Downloads" / MASTER_NAME)
+        validate_master(candidate.read_bytes())
+    for index, (rec, content, cache) in enumerate(sources, 1):
         if rec["path"] not in state["files"]:
             safe = re.sub("[^A-Za-z0-9_-]", "_", rec["path"].split("/")[-1])[:65]
             file_id = upload_claude(f"esm121_{index:02d}_{safe}.txt", content)
