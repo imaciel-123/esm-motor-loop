@@ -133,7 +133,7 @@ def payload(file_ids: list[str], question: str, model: str = MODEL) -> dict:
         "model": model, "store": False,
         "instructions": INSTRUCTIONS,
         "reasoning": {"effort": "medium"},
-        "max_output_tokens": 12000,
+        # Saida sem teto arbitrario: a API decide conforme limite do modelo.
         "input": [{"role": "user", "content": (
             [{"type": "input_file", "file_id": file_id} for file_id in file_ids]
             + [{"type": "input_text", "text": question}]
