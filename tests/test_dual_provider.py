@@ -118,7 +118,7 @@ class DualProviderTests(unittest.TestCase):
     def test_bad_hash_blocks_before_external_upload(self):
         self.entries[0]["sha256"] = "0" * 64
         with patch.object(m, "upload_claude") as upload:
-            with self.assertRaisesRegex(RuntimeError, "SHA256"):
+            with self.assertRaisesRegex(RuntimeError, "Fonte original indisponível"):
                 m.prepare(self.folder, self.entries)
             upload.assert_not_called()
 
