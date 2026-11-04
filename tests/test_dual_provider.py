@@ -1,5 +1,7 @@
 import hashlib
 import importlib.util
+import io
+import zipfile
 import json
 import tempfile
 import unittest
@@ -70,7 +72,7 @@ class DualProviderTests(unittest.TestCase):
                 return {"input_tokens": 180000}
             if url.endswith("/count_tokens"):
                 self.assertEqual(len(body["messages"][0]["content"]), 54)
-                self.assertEqual(body["messages"][0]["content"][0]["source"]["type"], "text")
+                self.assertEqual(body["messages"][0]["content"][0]["source"]["type"], "file")
                 return {"input_tokens": 181000}
             if url.endswith("/responses"):
                 self.assertEqual(len(body["input"][0]["content"]), 54)
@@ -95,6 +97,23 @@ class DualProviderTests(unittest.TestCase):
         self.assertEqual(observed.count(m.OPENAI + "/responses"), 1)
         self.assertEqual(observed.count(m.ANTHROPIC + "/messages"), 1)
         self.assertTrue((self.folder / "comparacao_h0_teste3/claude_response.md").exists())
+
+    def test_docx_conversion_and_provenance(self):
+        content = io.BytesIO()
+        xml = ('<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+               '<w:body><w:p><w:r><w:t>Contrato humano</w:t></w:r></w:p>'
+               '<w:p><w:r><w:t>Evidence concreta</w:t></w:r></w:p>'
+               '</w:body></w:document>')
+        with zipfile.ZipFile(content, "w") as z:
+            z.writestr("word/document.xml", xml)
+        source = content.getvalue()
+        converted = m.to_claude_text("reference/governanca.docx", source)
+        self.assertIn("Contrato humano", converted.decode())
+        self.assertIn("Evidence concreta", converted.decode())
+        self.assertEqual(source, content.getvalue())
+        self.assertNotEqual(m.digest(source), m.digest(converted))
+        with self.assertRaises(RuntimeError):
+            m.to_claude_text("reference/unknown.xlsx", b"binary")
 
     def test_bad_hash_blocks_before_external_upload(self):
         self.entries[0]["sha256"] = "0" * 64
