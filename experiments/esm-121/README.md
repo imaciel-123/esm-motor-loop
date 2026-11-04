@@ -89,3 +89,24 @@ Testes unitários são executados **offline** com simulações das APIs. Eles ve
 A utilização da Files API do Claude persiste conteúdo no workspace Anthropic; confirme a política de dados apropriada antes do primeiro upload. Não publique tokens, manifestos privados ou respostas no Git.
 
 Referências de API: [OpenAI file_search](https://developers.openai.com/api/docs/guides/tools-file-search), [Claude Files API](https://platform.claude.com/docs/en/build-with-claude/files), [Claude count_tokens](https://platform.claude.com/docs/en/build-with-claude/token-counting).
+
+## Recorte posterior à exclusão manual de duas referências (51 + Master)
+
+O operador removeu **das duas APIs** os arquivos
+`reference/ERENIQ_Governanca_Chats_Codex_v1_3_1.docx` e
+`reference/Loop_Operacional_Engineering_System_v1.3.docx`.
+O manifesto original 53/45, os uploads históricos e o incidente HTTP 404 permanecem preservados.
+A opção `--omit-deleted-references` deriva **51 fontes sem reupload** somente para preflight/inferência/comparação.
+Os resultados são gravados em `comparacao_h0_teste3/com_master_51_fontes/`,
+sem sobrescrever a tentativa anterior em `com_master/`.
+O registro `claude_files.json` continua sendo validado pelo manifesto original de 53;
+as referências removidas não são enviadas em nenhum dos dois payloads.
+
+```powershell
+python .\experiments\esm-121\dual_provider.py both --with-master --omit-deleted-references --max-output-tokens 12000 --execute
+```
+
+**Atenção:** o Master remanescente na Vector Store OpenAI não foi identificado após exclusão manual de versões.
+O erro anterior `Master ausente ou não indexado` permanece sem resolução comprovada.
+Antes de qualquer nova chamada paga, confirmar os IDs/estado da versão correta nos dois provedores.
+Uma tentativa anterior pode ter deixado `com_master/openai.pending.json`; não remover.

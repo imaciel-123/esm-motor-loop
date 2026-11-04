@@ -45,6 +45,33 @@ class DualProviderTests(unittest.TestCase):
         with patch.object(m, "upload_claude", side_effect=uploaded), patch("builtins.print"):
             return m.prepare(self.folder, self.entries)
 
+    def test_51_source_slice_excludes_exactly_the_two_deleted_references_and_preserves_state(self):
+        # Duas referências explicitamente removidas da seleção inicial.
+        names = m.REMOVED_REFERENCE_PATHS
+        for idx, name in [(0, names[0]), (1, names[1])]:
+            self.entries[idx]["path"] = name
+        old_id = m.identity(self.entries)
+        chosen = m.active_selection(self.entries, True)
+        self.assertEqual(len(chosen), 51)
+        self.assertEqual(len(self.entries), 53)
+        self.assertEqual(m.identity(self.entries), old_id)
+        self.assertTrue(all(e["path"] not in names for e in chosen))
+        self.assertEqual(len({e["file_id"] for e in chosen}), 51)
+        state = {"files": {e["path"]: {"file_id": f"file_claude_{n}"}
+                           for n, e in enumerate(self.entries)}, "master": {"file_id": "file_master"}}
+        oai, claude = m.requests(chosen, state, self.text, self.model, 12000, with_master=True)
+        openai_ids = [x["file_id"] for x in oai["input"][0]["content"] if x["type"] == "input_file"]
+        claude_ids = [x["source"]["file_id"] for x in claude["messages"][0]["content"] if x["type"] == "document"]
+        self.assertEqual(len(openai_ids), 51)
+        self.assertEqual(len(claude_ids), 52)  # 51 fontes + Master
+        for name in names:
+            removed = next(e for e in self.entries if e["path"] == name)
+            self.assertNotIn(removed["file_id"], openai_ids)
+            self.assertNotIn(state["files"][name]["file_id"], claude_ids)
+        self.assertIn("51 fontes", oai["instructions"])
+        self.assertNotEqual(m.result_folder(self.folder, True, True),
+                            m.result_folder(self.folder, True, False))
+
     def test_selection_validates_53_existing_ids(self):
         self.assertEqual(len(m.selection(self.folder)), 53)
         self.assertEqual(len({e["file_id"] for e in m.selection(self.folder)}), 53)
