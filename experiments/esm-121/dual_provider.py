@@ -6,7 +6,10 @@ Arquivos e resultados ficam sob data/ (ignorada pelo Git).
 """
 from __future__ import annotations
 import argparse, hashlib, json, os, re, sys, tempfile, uuid
+from io import BytesIO
 from pathlib import Path
+from xml.etree import ElementTree as ET
+from zipfile import ZipFile, BadZipFile
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -83,21 +86,49 @@ def prompt(folder, question):
     notes = (folder / "observacoes_consolidadas_45.txt").read_text(encoding="utf-8-sig")
     return q + "\n\nObservações preservadas sobre os 45 itens fora da entrada:\n" + notes
 
+def to_claude_text(path, original):
+    """Converte apenas DOCX para texto, sem afirmar equivalência de conteúdo visual."""
+    ext = Path(path).suffix.lower()
+    if ext == ".docx":
+        try:
+            with ZipFile(BytesIO(original)) as doc:
+                xml = doc.read("word/document.xml")
+            root = ET.fromstring(xml)
+        except (BadZipFile, KeyError, ET.ParseError) as exc:
+            raise RuntimeError("DOCX inválido ou ilegível: " + path) from exc
+        ns = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+        lines = []
+        for paragraph in root.iter(ns + "p"):
+            line = "".join(t.text or "" for t in paragraph.iter(ns + "t"))
+            if line.strip():
+                lines.append(line)
+        if not lines:
+            raise RuntimeError("DOCX sem texto extraível: " + path)
+        return ("[Fonte DOCX convertida para texto; imagens e elementos não textuais podem estar ausentes]\n"
+                + "\n".join(lines) + "\n").encode("utf-8")
+    if ext not in {".txt", ".md", ".json", ".csv", ".ts", ".tsx", ".js", ".jsx"}:
+        raise RuntimeError("Formato não suportado no Claude sem conversão explícita: " + path)
+    original.decode("utf-8-sig")
+    return original
+
 def source_bytes(folder, rec):
-    cache = folder / "comparacao_h0_teste3" / "fontes" / (digest(rec["path"].encode()) + ".txt")
+    original_cache = folder / "comparacao_h0_teste3" / "originais" / (digest(rec["path"].encode()) + ".bin")
+    text_cache = folder / "comparacao_h0_teste3" / "fontes" / (digest(rec["path"].encode()) + ".txt")
     local = folder.joinpath(*rec["path"].split("/"))
     if local.is_file():
         content = local.read_bytes()
-    elif cache.is_file():
-        content = cache.read_bytes()
+    elif original_cache.is_file():
+        content = original_cache.read_bytes()
     else:
         content = api(f"{OPENAI}/files/{rec['file_id']}/content", "GET", auth("openai"), raw=True)
     if digest(content).lower() != rec["sha256"].lower():
         raise RuntimeError("SHA256 divergente: " + rec["path"])
-    content.decode("utf-8-sig")
-    cache.parent.mkdir(parents=True, exist_ok=True)
-    cache.write_bytes(content)
-    return content, cache
+    transformed = to_claude_text(rec["path"], content)
+    original_cache.parent.mkdir(parents=True, exist_ok=True)
+    original_cache.write_bytes(content)
+    text_cache.parent.mkdir(parents=True, exist_ok=True)
+    text_cache.write_bytes(transformed)
+    return transformed, text_cache
 
 def upload_claude(name, content):
     boundary = "esm121-" + uuid.uuid4().hex
@@ -120,7 +151,9 @@ def prepare(folder, entries):
         if rec["path"] not in state["files"]:
             safe = re.sub("[^A-Za-z0-9_-]", "_", rec["path"].split("/")[-1])[:65]
             file_id = upload_claude(f"esm121_{index:02d}_{safe}.txt", content)
-            state["files"][rec["path"]] = {"file_id": file_id, "sha256": digest(content), "cache": str(cache)}
+            state["files"][rec["path"]] = {"file_id": file_id, "source_sha256": rec["sha256"],
+                                            "prepared_sha256": digest(content), "cache": str(cache),
+                                            "conversion": "docx-to-text" if rec["path"].lower().endswith(".docx") else "none"}
             save(path, state)
         print(f'{index}/53 {rec["path"]}: preparado')
     return state
@@ -131,8 +164,9 @@ def prepared(folder, entries):
         raise RuntimeError("Claude ainda não está preparado para os mesmos 53 arquivos")
     for rec in entries:
         info = state["files"][rec["path"]]
-        if not info["file_id"].startswith("file_") or digest(Path(info["cache"]).read_bytes()) != rec["sha256"]:
-            raise RuntimeError("Bytes ou IDs do Claude divergentes: " + rec["path"])
+        if (not info["file_id"].startswith("file_") or info.get("source_sha256") != rec["sha256"] or
+                digest(Path(info["cache"]).read_bytes()) != info.get("prepared_sha256")):
+            raise RuntimeError("Bytes, proveniência ou IDs do Claude divergentes: " + rec["path"])
     return state
 
 def requests(entries, state, text, model, output_tokens):
