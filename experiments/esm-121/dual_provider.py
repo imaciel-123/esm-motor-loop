@@ -187,13 +187,10 @@ def preflight(folder, entries, state, text, model, output_tokens, budget):
     count_oai = api(OPENAI + "/responses/input_tokens", "POST",
                     {**auth("openai"), "Content-Type": "application/json"},
                     {k: v for k, v in oai.items() if k != "max_output_tokens"})["input_tokens"]
-    inline = json.loads(json.dumps(claude))
-    for doc, entry in zip(inline["messages"][0]["content"][:-1], entries):
-        doc["source"] = {"type": "text", "media_type": "text/plain",
-                         "data": Path(state["files"][entry["path"]]["cache"]).read_text(encoding="utf-8-sig")}
+    # Count the exact file_id-backed input that will be submitted to Messages.
     count_claude = api(ANTHROPIC + "/messages/count_tokens", "POST",
                        {**auth("claude"), "Content-Type": "application/json"},
-                       {k: v for k, v in inline.items() if k != "max_tokens"})["input_tokens"]
+                       {k: v for k, v in claude.items() if k != "max_tokens"})["input_tokens"]
     rates = {"openai": OPENAI_RATE, "claude": CLAUDE_RATES[model]}
     counts = {"openai": int(count_oai), "claude": int(count_claude)}
     costs = {p: round((n * 1.2 * rates[p][0] + output_tokens * rates[p][1]) / 1e6, 4)
