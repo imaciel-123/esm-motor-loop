@@ -20,7 +20,7 @@ A investigação utiliza `experiments/esm-121/perguntas_teste3.md`. O livro *O S
 Configuração fixada para **3B**:
 
 - OpenAI Vector Store: `vs_6aeb93fb388481919fdc34fdacd4ffba`
-- OpenAI Master File ID: `file-Ahra6jSXMTMw625SegqSpR`
+- OpenAI Master File ID: `file-2J9CuGsQXaiuGG9Mn35ebu`
 - Master TXT: `O_Sistema_que_Constroi_o_Software_Master_1.5.1_INTEGRAL.txt`
 - Master SHA-256: `baad0b8603753c1bc722874b38ed4a58cd71e12c41c9a43febb6210aef426e66`
 
@@ -110,3 +110,5 @@ python .\experiments\esm-121\dual_provider.py both --with-master --omit-deleted-
 O erro anterior `Master ausente ou não indexado` permanece sem resolução comprovada.
 Antes de qualquer nova chamada paga, confirmar os IDs/estado da versão correta nos dois provedores.
 Uma tentativa anterior pode ter deixado `com_master/openai.pending.json`; não remover.
+
+**Atualização 04/11/2026:** depois da exclusão de uma versão duplicada do Master, o usuário confirmou na interface Storage que a mesma Vector Store contém o arquivo `file-2J9CuGsQXaiuGG9Mn35ebu` (7 MB de índice). O identificador anterior não corresponde mais ao arquivo anexado. A presença na interface não equivale à prova do SHA-256 remoto dos bytes originais; o SHA local do TXT permanece o valor declarado. Não é necessário novo upload para corrigir a referência.
