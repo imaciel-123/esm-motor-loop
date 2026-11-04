@@ -24,7 +24,7 @@ MASTER_NAME = "O_Sistema_que_Constroi_o_Software_Master_1.5.1_INTEGRAL.txt"
 MASTER_SHA256 = "baad0b8603753c1bc722874b38ed4a58cd71e12c41c9a43febb6210aef426e66"
 MASTER_BYTES = 1355168
 MASTER_STORE = "vs_6aeb93fb388481919fdc34fdacd4ffba"
-MASTER_OPENAI_FILE = "file-Ahra6jSXMTMw625SegqSpR"
+MASTER_OPENAI_FILE = "file-2J9CuGsQXaiuGG9Mn35ebu"
 REMOVED_REFERENCE_PATHS = (
     "reference/ERENIQ_Governanca_Chats_Codex_v1_3_1.docx",
     "reference/Loop_Operacional_Engineering_System_v1.3.docx",
