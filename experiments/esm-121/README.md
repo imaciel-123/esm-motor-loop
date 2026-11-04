@@ -1,70 +1,90 @@
-# Experimento ESM-121 — comparação com a investigação inicial
+# ESM-121 — investigação comparativa OpenAI × Claude
 
-**Mesmo caso e solicitação literal.** Este experimento é independente do produto ESM/ERENIQ; consulta as fontes do caso como corpus, sem alterar os sistemas consultados.
+Experimento independente do produto ESM/ERENIQ. Fontes privadas, hashes, prompts e resultados ficam em `data/`, fora do Git. Nenhuma chamada paga é feita sem `--execute`.
 
-## Corpus primário
+## Corpus e limites de evidência
 
-1. Snapshot **privado** do Jira ESM-121 (issue, cinco comentários, 22 mudanças de histórico, metadados dos cinco anexos).
-2. Nove PRs do repo privado `imaciel-123/esm`: descrições integrais, 39 commits, patches dos arquivos, reviews e comentários (inclusive listas vazias), 18 execuções de workflows, jobs e snapshots de código nos merges #221 e #229.
-3. Três documentos originais de referência (governança, loop, relatório de transformação). **Nenhum relatório retrospectivo anterior entra na entrada da LLM.**
+O corpus primário reconstruído a partir de Jira ESM-121 e GitHub contém 98 fontes inventariadas: 53 arquivos selecionados e observações consolidadas acerca dos outros 45. O experimento direto anterior incluiu snapshots de PRs, commits, testes, workflows, reviews, históricos Jira e três documentos de referência. Os cinco anexos Jira foram representados apenas por metadados, não pelo conteúdo. Reviews externos e logs integrais de jobs não estavam acessíveis.
 
-Os cinco anexos Jira em si não foram recuperados pela investigação humana original e não entram no recorte comparável; só metadados. O livro Master 1.5.1 não é anexado porque o arquivo excede sozinho o limite de 50 MB. Reviews externos e logs completos de jobs também continuam indisponíveis. A mudança de descrição de 13/10 está resumida no changelog do snapshot, não é transcrição integral dessa edição. O coletor não deve apresentar esses materiais ausentes como examinados.
+A investigação utiliza `experiments/esm-121/perguntas_teste3.md`. O livro *O Sistema que Constrói o Software — Master 1.5.1* não integrou a primeira entrada de 53 arquivos; incluí-lo constitui um **novo recorte experimental**, não uma reprodução da baseline.
 
-## Preparação (PowerShell na raiz de spike-llm-vF)
+## Testes separados
 
-O operador baixa o **ZIP privado** disponibilizado na conversa, sem publicar os dados no repositório. Mantenha-o em Downloads.
+| Modo | OpenAI | Claude | Resultado |
+| --- | --- | --- | --- |
+| **3A — 53 fontes** (padrão, sem flag) | Reutiliza 53 `file_id` já existentes; **não reenvia** | Arquivos referenciados pela Files API; DOCX convertidos para texto | `data/results/.../comparacao_h0_teste3/` |
+| **3B — 53 + Master** (`--with-master`) | Mesmos 53 IDs + `file_search` na Vector Store `competencias-esm`; requer recuperação efetiva | Mesmas 53 fontes + Master TXT indexado na Files API do Claude | `data/results/.../comparacao_h0_teste3/com_master/` |
 
-```powershell
-git fetch origin
-git switch feat/esm121-comparable-corpus
-git pull --ff-only origin feat/esm121-comparable-corpus
+**Diferença fundamental:** `file_search` recupera trechos relevantes do Master; o Claude recebe um documento TXT integral. Não é um teste de acesso ao Master sob condições técnicas idênticas. O conteúdo da Vector Store é validado por SHA-256, mas não se pode afirmar que a OpenAI consumiu o livro inteiro.
 
-py -3 .\experiments\esm-121\collect_esm121.py --seed "$HOME\Downloads\ESM121_Fontes_Primarias_Jira_e_Referencias.zip" --activate
-```
+Configuração fixada para **3B**:
 
-O coletor usa credencial existente do GitHub CLI (`gh auth token`), depois GH_TOKEN/GITHUB_TOKEN, ou Git Credential Manager (`git credential fill`). **Nunca copie tokens nesta conversa.** Apenas consultas GET ao repositório privado; nada é postado no GitHub. Se não houver credencial, a preparação bloqueia antes de ativar o corpus.
+- OpenAI Vector Store: `vs_6aeb93fb388481919fdc34fdacd4ffba`
+- OpenAI Master File ID: `file-Ahra6jSXMTMw625SegqSpR`
+- Master TXT: `O_Sistema_que_Constroi_o_Software_Master_1.5.1_INTEGRAL.txt`
+- Master SHA-256: `baad0b8603753c1bc722874b38ed4a58cd71e12c41c9a43febb6210aef426e66`
 
-O comando só ativa `data/input` depois de conferir nove PRs, 39 commits e pelo menos 18 execuções de workflow. Preserva o antigo `data/input` em `data/archive`. Os resultados anteriores em `data/results` não são alterados.
+A preparação do Claude envia o Master à **Anthropic Files API** apenas quando o operador executar `prepare --with-master --master-txt ...`. Se os 53 arquivos não estiverem preparados, esse comando também os envia à Anthropic. O upload realizado manualmente na interface de chat Claude **não disponibiliza necessariamente um `file_id` na API** e não pode ser presumido como entrada do executor.
 
-A saída detalhada e sua proveniência ficam em `data/esm121_manifest.json`.
+## Execução local no PowerShell
 
-## Chamada direta à LLM (somente após corpus validado)
+Use Python 3.12 disponível como `python`; não dependa do launcher `py -3` quando aponta para uma instalação inexistente. Trabalhe com a `main` integrada depois de aprovação humana da PR. O repositório local precisa conter `.git`, e o manifesto deve existir em `data/results/esm121-h0-revisado/20261102T133522Z/selecao_53_sem_reupload.json`. **Não apague nem recrie `data/`**.
 
-O **mesmo** programa da V0 continua responsável por uploads e inferência:
-
-```powershell
-py -3 .\direct_baseline.py --dir data/input --question experiments/esm-121/pergunta_original.md --execute
-```
-
-Como antes, é obrigatório informar OPENAI_API_KEY no ambiente e digitar ENVIAR. Uma inferência paga; os uploads são separados. A pergunta permanece literal. **Não execute se o materializador falhou**, se houver limitação de contexto ou se o corpus não for o esperado.
-
-## O que será comparado
-
-- Achados da resposta direta da LLM vs. auditoria humana anterior, descoberta por descoberta.
-- Evidência citada e verificação independente em fontes primárias; hipótese vs. fato.
-- Proveitos de investigação dinâmica vs. análise de um corpus congelado.
-
-As diferenças de modelo, temporização, conjunto de ferramentas e materiais indisponíveis serão declaradas; não alegar experimento controlado perfeito.
-
-**A PR contém só código e a pergunta; fontes Jira, PRs privados e resultados permanecem fora do Git.**
-
-## Teste H0 número 3 — comparação OpenAI × Claude sem novo upload na OpenAI
-
-A implementação adicionada em `dual_provider.py` é distinta do experimento histórico de pergunta original. Ela lê o manifesto da seleção validada em `data/results/esm121-h0-revisado/20261102T133522Z/selecao_53_sem_reupload.json`, **reutiliza os 53 IDs existentes da OpenAI**, recupera e confere os bytes das fontes por SHA-256 e prepara a mesma seleção na Files API do Claude. Nenhuma fonte ou resposta é commitada (`data/` fica fora do Git).
-
-Arquivos DOCX são extraídos para texto antes do envio ao Claude (imagens e elementos não textuais podem ficar fora do corpus Claude). Essa diferença de representação fica registrada com hashes de origem e texto preparado; não alegar equivalência perfeita de parser entre provedores.
-
-Com as chaves definidas apenas no ambiente e o manifesto local presente:
+Na raiz do repositório:
 
 ```powershell
-py -3 experiments/esm-121/dual_provider.py prepare
-py -3 experiments/esm-121/dual_provider.py preflight --max-output-tokens 24000 --budget-usd 5
-py -3 experiments/esm-121/dual_provider.py both --max-output-tokens 24000 --budget-usd 5 --execute
-py -3 experiments/esm-121/dual_provider.py compare
+python -m unittest discover -s tests -v
 ```
 
-**Os valores 24.000 e US$ 5 são somente exemplos, não limites escolhidos pelo projeto.** A pessoa operadora deve escolher explicitamente orçamento e limite de saída antes do preflight; uma estimativa não constitui teto absoluto de cobrança. A execução paga exige `--execute` e um preflight compatível. O executor conserva resposta, metadados, tokens e marcadores de chamada em `data/`; uma chamada de resultado incerto nunca é repetida automaticamente.
+Preparar **3A** (envia somente ao Claude os 53 arquivos ainda não cadastrados; reutiliza IDs OpenAI):
 
-`prepare` envia as fontes à Anthropic, mas não executa inferência. Não faz upload, exclusão ou alteração de arquivos na OpenAI. Verificar a política de dados aplicável antes de enviar documentos a um segundo provedor.
+```powershell
+python experiments/esm-121/dual_provider.py prepare
+```
 
-**Limite de validação:** testes automáticos offline não substituem um ensaio real de integração com chaves e corpus válidos. Uma falha de acesso à API ou incompatibilidade de formatos deve bloquear a inferência; nunca ajustar silenciosamente os 53 arquivos.
+Preparar **3B** (envia apenas o Master adicional se os 53 já estiverem preparados):
+
+```powershell
+$master = "C:\CAMINHO\O_Sistema_que_Constroi_o_Software_Master_1.5.1_INTEGRAL.txt"
+python experiments/esm-121/dual_provider.py prepare --with-master --master-txt "$master"
+```
+
+Este segundo comando verifica SHA-256 antes de enviar o Master. Os IDs Claude ficam em `data/results/.../comparacao_h0_teste3/claude_files.json`; o Master local validado é copiado para `master_integral.txt` dentro dessa mesma área ignorada pelo Git. Nenhum upload é feito à OpenAI.
+
+**Preflight 3B, sem inferência paga:** defina *você* três valores: `--max-output-tokens` (teto técnico de saída), `--budget-usd` (orçamento estimado por provedor) e `--search-token-reserve` (reserva estimada para material recuperado no OpenAI file_search, que não é previsível antes da execução). Não existem escolhas obrigatórias de tamanho de resposta nem limites fixos arbitrários; modelos e custos devem ser avaliados com o corpus real.
+
+```powershell
+python experiments/esm-121/dual_provider.py preflight --with-master --max-output-tokens N --budget-usd B --search-token-reserve R
+```
+
+Substitua `N`, `B` e `R` por números deliberadamente escolhidos; a linha acima é uma **sintaxe ilustrativa**, não um comando pronto. No preflight, o programa:
+
+1. Confere que a Vector Store da OpenAI está `completed`, contém o File ID esperado e que os bytes do TXT recuperados pela API têm o SHA-256 aprovado.
+2. Confere que o TXT do Claude foi preparado com hash igual e que as 53 fontes estão rastreáveis.
+3. Consulta `/responses/input_tokens` para a entrada OpenAI e `/messages/count_tokens` com **surrogate inline** das fontes TXT do Claude, pois o contador Anthropic não aceita `document.source=file`. Esta é uma **estimativa**, não contagem exata de documentos.
+4. Estima custos considerando margem de 20% de entrada, reserva declarada pelo operador e o adicional de contexto longo do modelo OpenAI quando aplicável. Inclui valor indicativo de **uma** busca; mais buscas custam. Estimativa **não** é teto de cobrança.
+5. Registra o fingerprint dos payloads, versão do experimento e limitações separadas por provedor.
+
+Só depois da conferência e autorização explícita será possível executar (a inferência pode ser cobrada):
+
+```powershell
+python experiments/esm-121/dual_provider.py both --with-master --max-output-tokens N --budget-usd B --search-token-reserve R --execute
+```
+
+O programa não repete automaticamente chamadas incertas ou já realizadas. No modo 3B, se a resposta OpenAI não registrar um resultado recuperado do **arquivo do Master**, preserva o resultado e a marca de chamada, mas **não declara conclusão bem-sucedida**. Não tente repetir sem investigar o ocorrido.
+
+Para inspecionar resultados sem novos custos:
+
+```powershell
+python experiments/esm-121/dual_provider.py compare --with-master
+```
+
+Sem `--with-master` os comandos de preflight, execução e comparação continuam relativos ao modo 3A; seus resultados não são substituídos pelos de 3B.
+
+## Status de validação
+
+Testes unitários são executados **offline** com simulações das APIs. Eles verificam estrutura de requisições, hashes, proibição de repetição, trilhas separadas e bloqueios. **Ainda não foi realizada integração real ponta a ponta com o corpus do usuário e as duas APIs.** Uma rejeição, limite ou incompatibilidade da API deve bloquear a inferência; não ajustar silenciosamente o corpus ou ignorar ausência de recuperação.
+
+A utilização da Files API do Claude persiste conteúdo no workspace Anthropic; confirme a política de dados apropriada antes do primeiro upload. Não publique tokens, manifestos privados ou respostas no Git.
+
+Referências de API: [OpenAI file_search](https://developers.openai.com/api/docs/guides/tools-file-search), [Claude Files API](https://platform.claude.com/docs/en/build-with-claude/files), [Claude count_tokens](https://platform.claude.com/docs/en/build-with-claude/token-counting).
