@@ -4,7 +4,11 @@
 
 > Não publique documentos, respostas ou chaves de API no Git. A pasta data/ é ignorada.
 
-## Preparação (Windows PowerShell)
+## ESM-121 — Teste 3 (OpenAI × Claude), execução e resultados
+
+O roteiro **atualizado em 04/11/2026** para executar os testes offline, consultar os dois resultados reais e abrir **uma nova rodada de inferência isolada** está em [experiments/esm-121/README.md](experiments/esm-121/README.md#guia-operacional-atualizado-04112026). O experimento usa o executor `experiments/esm-121/dual_provider.py`, independente da baseline `direct_baseline.py` descrita abaixo. **Não repita as chamadas já concluídas na pasta histórica**; elas estão protegidas contra repetição e devem ser preservadas.
+
+## Preparação (Windows PowerShell) — baseline direto anterior
 
 Clone a branch feat/direct-file-baseline e, dentro da pasta do projeto:
 
